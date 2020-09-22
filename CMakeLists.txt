@@ -412,9 +412,25 @@ if (BUILD_DLL OR NOT MSVC)
     add_library(chewing_shared SHARED
         $<TARGET_OBJECTS:chewing>
         $<TARGET_OBJECTS:common>
+        ${INC_DIR}/chewing.h
     )
     list(APPEND LIBS chewing_shared)
     add_dependencies(check chewing_shared)
+endif()
+
+if (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
+    set_target_properties(${LIBS} PROPERTIES
+        FRAMEWORK TRUE
+        FRAMEWORK_VERSION A
+        MACOSX_FRAMEWORK_IDENTIFIER org.ghostsinthelab.ChewingFramework
+        # MACOSX_FRAMEWORK_INFO_PLIST Info.plist
+        # "current version" in semantic format in Mach-O binary file
+        VERSION 3.3.1
+        # "compatibility version" in semantic format in Mach-O binary file
+        SOVERSION 3
+        PUBLIC_HEADER ${INC_DIR}/chewing.h
+        XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY "hiroshiyui@gmail.com"
+    )
 endif()
 
 if (NOT BUILD_DLL)

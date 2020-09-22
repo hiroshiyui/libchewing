@@ -146,3 +146,6 @@ contrib/test.sqlite3
 
 # python
 *.pyc
+
+# CMake workspace
+build/
