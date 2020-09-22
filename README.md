@@ -301,6 +301,10 @@ If you are in the build/ sub-directory, specify path of CMakeLists.txt to parent
 
         # cmake -DMAKEINFO=/usr/local/Cellar/texinfo/6.7/bin/makeinfo ..
 
+Also, if you want to make macOS Framework Bundle, give `-DBUILD_FRAMEWORK_BUNDLE=true` argument:
+
+        # cmake -DMAKEINFO=/usr/local/Cellar/texinfo/6.7/bin/makeinfo -DBUILD_FRAMEWORK_BUNDLE=true ..
+
 then
 
         # make

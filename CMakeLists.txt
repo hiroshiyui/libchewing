@@ -70,6 +70,8 @@ if(MSVC)
     set(WITH_INTERNAL_SQLITE3 true)
 endif()
 
+option(BUILD_FRAMEWORK_BUNDLE "Build macOS Freaework Bundle" false)
+
 # Use valgrind when testing
 option(USE_VALGRIND "Use valgrind when testing" true)
 
@@ -409,16 +411,25 @@ if (BUILD_DLL OR NOT MSVC)
     if (MSVC)
         add_definitions(-DCHEWINGDLL_EXPORTS)
     endif()
-    add_library(chewing_shared SHARED
-        $<TARGET_OBJECTS:chewing>
-        $<TARGET_OBJECTS:common>
-        ${INC_DIR}/chewing.h
-    )
+
+    if (${CMAKE_SYSTEM_NAME} MATCHES "Darwin" AND BUILD_FRAMEWORK_BUNDLE)
+        add_library(chewing_shared SHARED
+            $<TARGET_OBJECTS:chewing>
+            $<TARGET_OBJECTS:common>
+            ${INC_DIR}/chewing.h
+        )
+    else()
+        add_library(chewing_shared SHARED
+            $<TARGET_OBJECTS:chewing>
+            $<TARGET_OBJECTS:common>
+        )
+    endif()
+
     list(APPEND LIBS chewing_shared)
     add_dependencies(check chewing_shared)
 endif()
 
-if (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
+if (${CMAKE_SYSTEM_NAME} MATCHES "Darwin" AND BUILD_FRAMEWORK_BUNDLE)
     set_target_properties(${LIBS} PROPERTIES
         FRAMEWORK TRUE
         FRAMEWORK_VERSION A
