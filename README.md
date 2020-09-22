@@ -286,12 +286,20 @@ then
         # make
 
 
-### cmake
+### CMake
+
+You might like to make a sub-directory for a workspace of CMake:
+
+	# mkdir -p ./build && cd ./build
 
 Because OS X uses an older version of `makeinfo`, you have to set MAKEINFO
 manually to where Homebrew installed makeinfo. For example:
 
         # cmake -DMAKEINFO=/usr/local/Cellar/texinfo/5.2/bin/makeinfo .
+
+If you are in the build/ sub-directory, specify path of CMakeLists.txt to parent directory:
+
+        # cmake -DMAKEINFO=/usr/local/Cellar/texinfo/5.2/bin/makeinfo ..
 
 then
 
