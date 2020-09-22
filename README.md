@@ -279,7 +279,7 @@ If you get the source from the git repository, run:
 Because OS X uses an older version of `makeinfo`, you have to set MAKEINFO
 manually to where Homebrew installed makeinfo. For example:
 
-        # ./configure MAKEINFO=/usr/local/Cellar/texinfo/5.2/bin/makeinfo
+        # ./configure MAKEINFO=/usr/local/Cellar/texinfo/6.7/bin/makeinfo
 
 then
 
@@ -295,11 +295,11 @@ You might like to make a sub-directory for a workspace of CMake:
 Because OS X uses an older version of `makeinfo`, you have to set MAKEINFO
 manually to where Homebrew installed makeinfo. For example:
 
-        # cmake -DMAKEINFO=/usr/local/Cellar/texinfo/5.2/bin/makeinfo .
+        # cmake -DMAKEINFO=/usr/local/Cellar/texinfo/6.7/bin/makeinfo .
 
 If you are in the build/ sub-directory, specify path of CMakeLists.txt to parent directory:
 
-        # cmake -DMAKEINFO=/usr/local/Cellar/texinfo/5.2/bin/makeinfo ..
+        # cmake -DMAKEINFO=/usr/local/Cellar/texinfo/6.7/bin/makeinfo ..
 
 then
 
