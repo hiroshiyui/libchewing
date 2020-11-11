@@ -14,13 +14,3 @@ make
 # build data files
 cd $BASEDIR/data
 make
-
-# build zip archive
-cd $BASEDIR
-
-FILES=("dictionary.dat" "index_tree.dat" "pinyin.tab" "swkb.dat" "symbols.dat")
-
-for ((i=0; i < ${#FILES[@]}; i++))
-do
-  zip -j data.zip $BASEDIR/data/${FILES[$i]}
-done
