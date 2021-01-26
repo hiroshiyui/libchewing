@@ -3,7 +3,6 @@
 
 require 'oj'
 require 'unicode/emoji'
-require 'toml-rb'
 
 class String
   def safe_toml_key
@@ -30,8 +29,4 @@ end
 
 File.open('./emoji.json', 'w+') do |f|
     f << Oj.dump(emoji_list)
-end
-
-File.open('./emoji.toml', 'w+') do |f|
-    f << TomlRB.dump(emoji_list)
 end
