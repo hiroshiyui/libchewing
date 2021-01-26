@@ -1,0 +1,35 @@
+#!/usr/bin/env ruby
+# encoding: utf-8
+
+require 'json'
+require 'unicode/emoji'
+require 'toml-rb'
+
+class String
+  def safe_toml_key
+    safe_toml_key = self.dup
+    safe_toml_key.gsub!(" ", "_")
+    safe_toml_key.gsub!("&", "and")
+    safe_toml_key.downcase!
+    safe_toml_key
+  end
+end
+
+emoji_list = {}
+Unicode::Emoji.list.keys.each do |l|
+    emoji_list[l.safe_toml_key] = {}
+    emoji_list[l.safe_toml_key]['category'] = l
+    Unicode::Emoji.list(l).keys.each do |subcategory|
+        emoji_list[l.safe_toml_key][subcategory] = {}
+        emoji_list[l.safe_toml_key][subcategory]['emojis'] = []
+        emoji_list[l.safe_toml_key][subcategory]['emojis'] << Unicode::Emoji.list(l, subcategory).to_s
+    end
+end
+
+File.open('./emoji.json', 'w+') do |f|
+    f << emoji_list.to_json
+end
+
+File.open('./emoji.toml', 'w+') do |f|
+    f << TomlRB.dump(emoji_list)
+end
