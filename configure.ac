@@ -109,6 +109,9 @@ AS_IF([test x"$with_sqlite3" = x"yes"], [
               ])
 ])
 
+# json-parser
+AM_CFLAGS="$AM_CFLAGS -Ithirdparty/json-parser"
+
 # plat_mmap_posix
 AC_FUNC_MMAP
 

@@ -33,6 +33,10 @@
 #include "userphrase-private.h"
 #include "private.h"
 
+/* json-parser */
+#include "../thirdparty/json-parser/json.h"
+#include "../thirdparty/json-parser/json.c"
+
 #ifdef HAVE_ASPRINTF
 /* asprintf is provided by GNU extensions and *BSD */
 #    ifndef _GNU_SOURCE
