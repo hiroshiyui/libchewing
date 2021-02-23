@@ -14,16 +14,21 @@ class String
   end
 end
 
-emoji_list = {}
+emoji_list = []
 Unicode::Emoji.list.keys.each do |l|
-    emoji_list[l.safe_key_format] = {}
-    emoji_list[l.safe_key_format]['category'] = l
+    category_list = Hash.new
+    category_list['category'] = l
+    category_list['category_icon'] = ""
+    category_list['emojis'] = Array.new
     Unicode::Emoji.list(l).keys.each do |subcategory|
-        emoji_list[l.safe_key_format][subcategory] = {}
-        emoji_list[l.safe_key_format][subcategory]['emojis'] = []
         Unicode::Emoji.list(l, subcategory).each do |emoji|
-            emoji_list[l.safe_key_format][subcategory]['emojis'] << emoji
+            category_list['emojis'] << emoji
         end
+    end
+
+    if category_list['emojis'].count > 0
+        category_list['category_icon'] = category_list['emojis'].first
+        emoji_list << category_list
     end
 end
 
