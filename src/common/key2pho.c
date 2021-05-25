@@ -77,7 +77,7 @@ static const char *const key_str[KBTYPE_COUNT] = {
     "bpmfdtnlvkhg7c,./j;'sexuaorwiqzy890-=1234",        /* ET  */
     "bpmfdtnlvkhgvcgycjqwsexuaorwiqzpmntlhdfjk",        /* ET26 */
     "1'a;2,oq.ejpuk5yixfdbghm8ctw9rnv0lsz[7634",        /* Dvorak */
-    "bpmfdtnlgkhjvcjvcrzasexuyhgeiawomnkllsdfj",        /* Dvorak Hsu */
+    "bpmfdtnlgkhjvcjvcrzasexuyhgeiawomnklloeuh",        /* Dvorak Hsu */
     "qqazwwsxedcrfvttgbyhnujmuikbiolmoplnpyerd",        /* DACHEN-CP26 */
     "1qaz2wsxedcrfv5tgbyhnujm8ik,9ol.0p;/-7634",        /* Hanyu Pinyin */
     "1qaz2wsxedcrfv5tgbyhnujm8ik,9ol.0p;/-7634",        /* Luoma Pinyin */
