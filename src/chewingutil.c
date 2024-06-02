@@ -1254,7 +1254,7 @@ int OpenSymbolChoice(ChewingData *pgdata)
 int InitSymbolTable(ChewingData *pgdata, const char *prefix)
 {
     static const unsigned int MAX_SYMBOL_ENTRY = 100;
-    static const size_t LINE_LEN = 512; // shall be long enough?
+    static const size_t LINE_LEN = 4096; // shall be long enough?
 
     char *filename = NULL;
     FILE *file = NULL;
