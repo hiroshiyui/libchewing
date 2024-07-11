@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24.0)
 project(libchewing LANGUAGES C)
 
-set(CMAKE_PROJECT_VERSION 0.8.4)
+set(CMAKE_PROJECT_VERSION 0.8.5)
 set(LIBCHEWING_VERSION ${CMAKE_PROJECT_VERSION})
 set(PACKAGE_VERSION ${CMAKE_PROJECT_VERSION})
 set(LIBCHEWING_BINARY_VERSION 1.0.0)
@@ -93,7 +93,7 @@ if(WITH_RUST)
         FetchContent_Declare(
             Corrosion
             GIT_REPOSITORY https://github.com/corrosion-rs/corrosion.git
-            GIT_TAG be76480232216a64f65e3b1d9794d68cbac6c690 # v0.4.5
+            GIT_TAG 64289b1d79d6d19cd2e241db515381a086bb8407 # v0.5
             FIND_PACKAGE_ARGS
         )
         FetchContent_MakeAvailable(Corrosion)
