@@ -7,11 +7,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use log::info;
+use log::{info, warn};
 
 use crate::{
     editor::{AbbrevTable, SymbolSelector},
-    path::{find_path_by_files, sys_path_from_env_var, userphrase_path},
+    path::{find_extra_dat_by_path, find_path_by_files, sys_path_from_env_var, userphrase_path},
 };
 
 #[cfg(feature = "sqlite")]
@@ -27,6 +27,7 @@ const UD_MEM_FILE_NAME: &str = ":memory:";
 const ABBREV_FILE_NAME: &str = "swkb.dat";
 const SYMBOLS_FILE_NAME: &str = "symbols.dat";
 
+/// Automatically searchs and loads system dictionaries.
 #[derive(Debug, Default)]
 pub struct SystemDictionaryLoader {
     sys_path: Option<String>,
@@ -54,13 +55,18 @@ fn io_err(err: io::Error) -> LoadDictionaryError {
 }
 
 impl SystemDictionaryLoader {
+    /// Creates a new system dictionary loader.
     pub fn new() -> SystemDictionaryLoader {
         SystemDictionaryLoader::default()
     }
+    /// Override the default system dictionary search path.
     pub fn sys_path(mut self, path: impl Into<String>) -> SystemDictionaryLoader {
         self.sys_path = Some(path.into());
         self
     }
+    /// Searches and loads the system dictionaries and extra dictionaries.
+    ///
+    /// If no dictionary were found, a builtn minimum dictionary will be loaded.
     pub fn load(&self) -> Result<Vec<Box<dyn Dictionary>>, LoadDictionaryError> {
         let search_path = if let Some(sys_path) = &self.sys_path {
             sys_path.to_owned()
@@ -70,16 +76,30 @@ impl SystemDictionaryLoader {
         let sys_path = find_path_by_files(&search_path, &[SD_WORD_FILE_NAME, SD_TSI_FILE_NAME])
             .ok_or(LoadDictionaryError::NotFound)?;
 
-        let tsi_dict_path = sys_path.join(SD_TSI_FILE_NAME);
-        info!("Loading {SD_TSI_FILE_NAME}");
-        let tsi_dict = Trie::open(tsi_dict_path).map_err(io_err)?;
+        let mut results: Vec<Box<dyn Dictionary>> = vec![];
 
         let word_dict_path = sys_path.join(SD_WORD_FILE_NAME);
         info!("Loading {SD_WORD_FILE_NAME}");
         let word_dict = Trie::open(word_dict_path).map_err(io_err)?;
+        results.push(Box::new(word_dict));
 
-        Ok(vec![Box::new(word_dict), Box::new(tsi_dict)])
+        let tsi_dict_path = sys_path.join(SD_TSI_FILE_NAME);
+        info!("Loading {SD_TSI_FILE_NAME}");
+        let tsi_dict = Trie::open(tsi_dict_path).map_err(io_err)?;
+        results.push(Box::new(tsi_dict));
+
+        let extra_files = find_extra_dat_by_path(&search_path);
+        for path in extra_files {
+            info!("Loading {}", path.display());
+            match Trie::open(&path) {
+                Ok(dict) => results.push(Box::new(dict)),
+                Err(e) => warn!("Failed to load {}: {e}", path.display()),
+            }
+        }
+
+        Ok(results)
     }
+    /// Loads the abbrev table.
     pub fn load_abbrev(&self) -> Result<AbbrevTable, LoadDictionaryError> {
         let search_path = if let Some(sys_path) = &self.sys_path {
             sys_path.to_owned()
@@ -92,6 +112,7 @@ impl SystemDictionaryLoader {
         info!("Loading {ABBREV_FILE_NAME}");
         AbbrevTable::open(abbrev_path).map_err(io_err)
     }
+    /// Loads the symbol table.
     pub fn load_symbol_selector(&self) -> Result<SymbolSelector, LoadDictionaryError> {
         let search_path = if let Some(sys_path) = &self.sys_path {
             sys_path.to_owned()
@@ -106,19 +127,26 @@ impl SystemDictionaryLoader {
     }
 }
 
+/// Automatically searches and loads the user dictionary.
 #[derive(Debug, Default)]
 pub struct UserDictionaryLoader {
     data_path: Option<PathBuf>,
 }
 
 impl UserDictionaryLoader {
+    /// Creates a user dictionary loader.
     pub fn new() -> UserDictionaryLoader {
         UserDictionaryLoader::default()
     }
+    /// Override the default user dictionary search path.
     pub fn userphrase_path(mut self, path: impl AsRef<Path>) -> UserDictionaryLoader {
         self.data_path = Some(path.as_ref().to_path_buf());
         self
     }
+    /// Searches and loads the user dictionary.
+    ///
+    /// If no user dictionary were found, a new dictionary will be created at
+    /// the default path.
     pub fn load(self) -> io::Result<Box<dyn Dictionary>> {
         let data_path = self
             .data_path

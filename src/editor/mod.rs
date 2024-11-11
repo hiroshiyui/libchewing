@@ -19,10 +19,13 @@ pub use estimate::{LaxUserFreqEstimate, UserFreqEstimate};
 use log::{debug, info, trace, warn};
 
 use crate::{
-    conversion::{full_width_symbol_input, special_symbol_input, ChewingEngine, Interval, Symbol},
+    conversion::{
+        full_width_symbol_input, special_symbol_input, ChewingEngine, ConversionEngine, Interval,
+        Symbol,
+    },
     dictionary::{
-        Dictionary, DictionaryMut, Layered, SystemDictionaryLoader, UpdateDictionaryError,
-        UserDictionaryLoader,
+        Dictionary, DictionaryMut, Layered, LookupStrategy, SystemDictionaryLoader,
+        UpdateDictionaryError, UserDictionaryLoader,
     },
     editor::keyboard::KeyCode,
     zhuyin::{Syllable, SyllableSlice},
@@ -53,6 +56,13 @@ pub enum UserPhraseAddDirection {
     Backward,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConversionEngineKind {
+    SimpleEngine,
+    ChewingEngine,
+    FuzzyChewingEngine,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct EditorOptions {
     pub easy_symbol_input: bool,
@@ -66,6 +76,9 @@ pub struct EditorOptions {
     pub language_mode: LanguageMode,
     pub character_form: CharacterForm,
     pub user_phrase_add_dir: UserPhraseAddDirection,
+    pub lookup_strategy: LookupStrategy,
+    pub conversion_engine: ConversionEngineKind,
+    pub enable_fullwidth_toggle_key: bool,
 }
 
 impl Default for EditorOptions {
@@ -82,6 +95,10 @@ impl Default for EditorOptions {
             language_mode: LanguageMode::Chinese,
             character_form: CharacterForm::Halfwidth,
             user_phrase_add_dir: UserPhraseAddDirection::Forward,
+            lookup_strategy: LookupStrategy::Standard,
+            // FIXME may be out of sync with the engine used
+            conversion_engine: ConversionEngineKind::ChewingEngine,
+            enable_fullwidth_toggle_key: true,
         }
     }
 }
@@ -158,7 +175,7 @@ impl Error for EditorError {}
 pub(crate) struct SharedState {
     com: CompositionEditor,
     syl: Box<dyn SyllableEditor>,
-    conv: ChewingEngine,
+    conv: Box<dyn ConversionEngine>,
     dict: Layered,
     abbr: AbbrevTable,
     sym_sel: SymbolSelector,
@@ -178,7 +195,7 @@ impl Editor {
         let user_dict = UserDictionaryLoader::new().load()?;
         let estimate = LaxUserFreqEstimate::max_from(user_dict.as_ref());
         let dict = Layered::new(system_dict, user_dict);
-        let conversion_engine = ChewingEngine::new();
+        let conversion_engine = Box::new(ChewingEngine::new());
         let abbrev = SystemDictionaryLoader::new().load_abbrev()?;
         let sym_sel = SystemDictionaryLoader::new().load_symbol_selector()?;
         let editor = Editor::new(conversion_engine, dict, estimate, abbrev, sym_sel);
@@ -186,7 +203,7 @@ impl Editor {
     }
 
     pub fn new(
-        conv: ChewingEngine,
+        conv: Box<dyn ConversionEngine>,
         dict: Layered,
         estimate: LaxUserFreqEstimate,
         abbr: AbbrevTable,
@@ -216,9 +233,16 @@ impl Editor {
         self.shared.syl = syl;
         info!("Set syllable editor: {:?}", self.shared.syl);
     }
+    pub fn set_conversion_engine(&mut self, engine: Box<dyn ConversionEngine>) {
+        self.shared.conv = engine;
+        info!("Set conversion engine: {:?}", self.shared.conv);
+    }
     pub fn clear(&mut self) {
         self.state = Box::new(Entering);
         self.shared.clear();
+    }
+    pub fn ack(&mut self) {
+        self.shared.commit_buffer.clear();
     }
     pub fn clear_syllable_editor(&mut self) {
         self.shared.syl.clear();
@@ -226,38 +250,17 @@ impl Editor {
     pub fn cursor(&self) -> usize {
         self.shared.cursor()
     }
-    pub fn language_mode(&self) -> LanguageMode {
-        self.shared.options.language_mode
-    }
-    pub fn set_language_mode(&mut self, language_mode: LanguageMode) {
-        self.shared.syl.clear();
-        self.shared.options.language_mode = language_mode;
-    }
-
-    pub fn character_form(&self) -> CharacterForm {
-        self.shared.options.character_form
-    }
-    pub fn set_character_form(&mut self, charactor_form: CharacterForm) {
-        self.shared.options.character_form = charactor_form;
-    }
 
     // TODO: deprecate other direct set methods
     pub fn editor_options(&self) -> EditorOptions {
         self.shared.options
     }
     pub fn set_editor_options(&mut self, options: EditorOptions) {
+        if self.shared.options.language_mode != options.language_mode {
+            self.shared.syl.clear();
+        }
         self.shared.options = options;
     }
-    pub fn switch_character_form(&mut self) {
-        self.shared.options = EditorOptions {
-            character_form: match self.shared.options.character_form {
-                CharacterForm::Halfwidth => CharacterForm::Fullwidth,
-                CharacterForm::Fullwidth => CharacterForm::Halfwidth,
-            },
-            ..self.shared.options
-        };
-    }
-
     pub fn entering_syllable(&self) -> bool {
         !self.shared.syl.is_empty()
     }
@@ -520,6 +523,12 @@ impl SharedState {
     fn intervals(&self) -> impl Iterator<Item = Interval> {
         self.conversion().into_iter()
     }
+    fn snapshot(&mut self) {
+        // for interval in self.intervals() {
+        //     self.com.select(interval);
+        // }
+        // self.nth_conversion = 0;
+    }
     fn cursor(&self) -> usize {
         self.com.cursor()
     }
@@ -562,7 +571,7 @@ impl SharedState {
         if self
             .dict
             .user_dict()
-            .lookup_all_phrases(&syllables)
+            .lookup_all_phrases(&syllables, LookupStrategy::Standard)
             .into_iter()
             .any(|it| it.as_str() == phrase)
         {
@@ -593,7 +602,9 @@ impl SharedState {
             );
             return Err(UpdateDictionaryError::new());
         }
-        let phrases = self.dict.lookup_all_phrases(syllables);
+        let phrases = self
+            .dict
+            .lookup_all_phrases(syllables, LookupStrategy::Standard);
         if phrases.is_empty() {
             self.dict.add_phrase(syllables, (phrase, 1).into())?;
             return Ok(());
@@ -627,6 +638,15 @@ impl SharedState {
             language_mode: match self.options.language_mode {
                 LanguageMode::English => LanguageMode::Chinese,
                 LanguageMode::Chinese => LanguageMode::English,
+            },
+            ..self.options
+        };
+    }
+    fn switch_character_form(&mut self) {
+        self.options = EditorOptions {
+            character_form: match self.options.character_form {
+                CharacterForm::Halfwidth => CharacterForm::Fullwidth,
+                CharacterForm::Fullwidth => CharacterForm::Halfwidth,
             },
             ..self.options
         };
@@ -743,7 +763,7 @@ impl BasicEditor for Editor {
             Transition::Spin(behavior) => self.shared.last_key_behavior = behavior,
         }
 
-        if self.shared.last_key_behavior == EditorKeyBehavior::Absorb {
+        if self.is_entering() && self.shared.last_key_behavior == EditorKeyBehavior::Absorb {
             self.shared.try_auto_commit();
         }
         trace!("last_key_behavior = {:?}", self.shared.last_key_behavior);
@@ -908,6 +928,7 @@ impl State for Entering {
                 }
             }
             Home => {
+                shared.snapshot();
                 shared.com.move_cursor_to_beginning();
                 self.spin_absorb()
             }
@@ -915,28 +936,29 @@ impl State for Entering {
                 if shared.com.is_beginning_of_buffer() {
                     return self.spin_ignore();
                 }
+                shared.snapshot();
                 self.start_highlighting(shared.cursor() - 1)
             }
             Right if ev.modifiers.shift => {
                 if shared.com.is_end_of_buffer() {
                     return self.spin_ignore();
                 }
+                shared.snapshot();
                 self.start_highlighting(shared.cursor() + 1)
             }
             Left => {
+                shared.snapshot();
                 shared.com.move_cursor_left();
                 self.spin_absorb()
             }
             Right => {
+                shared.snapshot();
                 shared.com.move_cursor_right();
                 self.spin_absorb()
             }
             Up => self.spin_ignore(),
-            Space if ev.modifiers.shift => {
-                shared.options.character_form = match shared.options.character_form {
-                    CharacterForm::Halfwidth => CharacterForm::Fullwidth,
-                    CharacterForm::Fullwidth => CharacterForm::Halfwidth,
-                };
+            Space if ev.modifiers.shift && shared.options.enable_fullwidth_toggle_key => {
+                shared.switch_character_form();
                 self.spin_absorb()
             }
             Space
@@ -950,6 +972,7 @@ impl State for Entering {
                 self.start_selecting(shared)
             }
             End | PageUp | PageDown => {
+                shared.snapshot();
                 shared.com.move_cursor_to_end();
                 self.spin_absorb()
             }
@@ -975,69 +998,24 @@ impl State for Entering {
                     self.spin_absorb()
                 }
             }
-            _ => match shared.options.language_mode {
-                LanguageMode::Chinese if ev.code == Grave && ev.modifiers.is_none() => {
-                    self.start_symbol_input(shared)
+            _ => {
+                if shared.nth_conversion != 0 {
+                    shared.snapshot();
                 }
-                LanguageMode::Chinese if ev.code == Space => match shared.options.character_form {
-                    CharacterForm::Halfwidth => {
-                        if shared.com.is_empty() {
-                            shared.commit_buffer.clear();
-                            shared.commit_buffer.push(ev.unicode);
-                            self.spin_commit()
-                        } else {
-                            shared.com.insert(Symbol::from(ev.unicode));
-                            self.spin_absorb()
-                        }
+                match shared.options.language_mode {
+                    LanguageMode::Chinese if ev.code == Grave && ev.modifiers.is_none() => {
+                        self.start_symbol_input(shared)
                     }
-                    CharacterForm::Fullwidth => {
-                        let char_ = full_width_symbol_input(ev.unicode).unwrap();
-                        if shared.com.is_empty() {
-                            shared.commit_buffer.clear();
-                            shared.commit_buffer.push(char_);
-                            self.spin_commit()
-                        } else {
-                            shared.com.insert(Symbol::from(char_));
-                            self.spin_absorb()
-                        }
-                    }
-                },
-                LanguageMode::Chinese if shared.options.easy_symbol_input => {
-                    // Priortize symbol input
-                    if let Some(expended) = shared.abbr.find_abbrev(ev.unicode) {
-                        expended
-                            .chars()
-                            .for_each(|ch| shared.com.insert(Symbol::from(ch)));
-                        return self.spin_absorb();
-                    }
-                    if let Some(symbol) = special_symbol_input(ev.unicode) {
-                        shared.com.insert(Symbol::from(symbol));
-                        return self.spin_absorb();
-                    }
-                    if ev.modifiers.is_none() && KeyBehavior::Absorb == shared.syl.key_press(ev) {
-                        return self.start_enter_syllable();
-                    }
-                    self.spin_bell()
-                }
-                LanguageMode::Chinese => {
-                    if ev.modifiers.is_none() && KeyBehavior::Absorb == shared.syl.key_press(ev) {
-                        return self.start_enter_syllable();
-                    }
-                    if let Some(symbol) = special_symbol_input(ev.unicode) {
-                        shared.com.insert(Symbol::from(symbol));
-                        return self.spin_absorb();
-                    }
-                    if ev.is_printable() {
+                    LanguageMode::Chinese if ev.code == Space => {
                         match shared.options.character_form {
                             CharacterForm::Halfwidth => {
                                 if shared.com.is_empty() {
-                                    // FIXME we should ignore these keys if pre-edit is empty
                                     shared.commit_buffer.clear();
                                     shared.commit_buffer.push(ev.unicode);
-                                    return self.spin_commit();
+                                    self.spin_commit()
                                 } else {
                                     shared.com.insert(Symbol::from(ev.unicode));
-                                    return self.spin_absorb();
+                                    self.spin_absorb()
                                 }
                             }
                             CharacterForm::Fullwidth => {
@@ -1045,41 +1023,95 @@ impl State for Entering {
                                 if shared.com.is_empty() {
                                     shared.commit_buffer.clear();
                                     shared.commit_buffer.push(char_);
-                                    return self.spin_commit();
+                                    self.spin_commit()
                                 } else {
                                     shared.com.insert(Symbol::from(char_));
-                                    return self.spin_absorb();
+                                    self.spin_absorb()
                                 }
                             }
                         }
                     }
-                    self.spin_bell()
+                    LanguageMode::Chinese if shared.options.easy_symbol_input => {
+                        // Priortize symbol input
+                        if let Some(expended) = shared.abbr.find_abbrev(ev.unicode) {
+                            expended
+                                .chars()
+                                .for_each(|ch| shared.com.insert(Symbol::from(ch)));
+                            return self.spin_absorb();
+                        }
+                        if let Some(symbol) = special_symbol_input(ev.unicode) {
+                            shared.com.insert(Symbol::from(symbol));
+                            return self.spin_absorb();
+                        }
+                        if ev.modifiers.is_none() && KeyBehavior::Absorb == shared.syl.key_press(ev)
+                        {
+                            return self.start_enter_syllable();
+                        }
+                        self.spin_bell()
+                    }
+                    LanguageMode::Chinese => {
+                        if ev.modifiers.is_none() && KeyBehavior::Absorb == shared.syl.key_press(ev)
+                        {
+                            return self.start_enter_syllable();
+                        }
+                        if let Some(symbol) = special_symbol_input(ev.unicode) {
+                            shared.com.insert(Symbol::from(symbol));
+                            return self.spin_absorb();
+                        }
+                        if ev.is_printable() {
+                            match shared.options.character_form {
+                                CharacterForm::Halfwidth => {
+                                    if shared.com.is_empty() {
+                                        // FIXME we should ignore these keys if pre-edit is empty
+                                        shared.commit_buffer.clear();
+                                        shared.commit_buffer.push(ev.unicode);
+                                        return self.spin_commit();
+                                    } else {
+                                        shared.com.insert(Symbol::from(ev.unicode));
+                                        return self.spin_absorb();
+                                    }
+                                }
+                                CharacterForm::Fullwidth => {
+                                    let char_ = full_width_symbol_input(ev.unicode).unwrap();
+                                    if shared.com.is_empty() {
+                                        shared.commit_buffer.clear();
+                                        shared.commit_buffer.push(char_);
+                                        return self.spin_commit();
+                                    } else {
+                                        shared.com.insert(Symbol::from(char_));
+                                        return self.spin_absorb();
+                                    }
+                                }
+                            }
+                        }
+                        self.spin_bell()
+                    }
+                    LanguageMode::English => match shared.options.character_form {
+                        CharacterForm::Halfwidth => {
+                            if shared.com.is_empty() {
+                                // FIXME we should ignore these keys if pre-edit is empty
+                                shared.commit_buffer.clear();
+                                shared.commit_buffer.push(ev.unicode);
+                                self.spin_commit()
+                            } else {
+                                shared.com.insert(Symbol::from(ev.unicode));
+                                self.spin_absorb()
+                            }
+                        }
+                        CharacterForm::Fullwidth => {
+                            let char_ = full_width_symbol_input(ev.unicode).unwrap();
+                            if shared.com.is_empty() {
+                                shared.commit_buffer.clear();
+                                shared.commit_buffer.push(char_);
+                                self.spin_commit()
+                            } else {
+                                shared.com.insert(Symbol::from(char_));
+                                self.spin_absorb()
+                            }
+                        }
+                    },
                 }
-                LanguageMode::English => match shared.options.character_form {
-                    CharacterForm::Halfwidth => {
-                        if shared.com.is_empty() {
-                            // FIXME we should ignore these keys if pre-edit is empty
-                            shared.commit_buffer.clear();
-                            shared.commit_buffer.push(ev.unicode);
-                            self.spin_commit()
-                        } else {
-                            shared.com.insert(Symbol::from(ev.unicode));
-                            self.spin_absorb()
-                        }
-                    }
-                    CharacterForm::Fullwidth => {
-                        let char_ = full_width_symbol_input(ev.unicode).unwrap();
-                        if shared.com.is_empty() {
-                            shared.commit_buffer.clear();
-                            shared.commit_buffer.push(char_);
-                            self.spin_commit()
-                        } else {
-                            shared.com.insert(Symbol::from(char_));
-                            self.spin_absorb()
-                        }
-                    }
-                },
-            },
+            }
         }
     }
 
@@ -1109,6 +1141,10 @@ impl EnteringSyllable {
             None => self.spin_ignore(),
         }
     }
+    fn start_selecting_simple_engine(&self, editor: &mut SharedState) -> Transition {
+        editor.syl.clear();
+        Transition::ToState(Box::new(Selecting::new_phrase_for_simple_engine(editor)))
+    }
 }
 
 impl State for EnteringSyllable {
@@ -1137,21 +1173,49 @@ impl State for EnteringSyllable {
                 }
                 self.start_entering()
             }
-            _ => match shared.syl.key_press(ev) {
-                KeyBehavior::Absorb => self.spin_absorb(),
-                KeyBehavior::Commit => {
-                    if shared
-                        .dict
-                        .lookup_first_phrase(&[shared.syl.read()])
-                        .is_some()
-                    {
-                        shared.com.insert(Symbol::from(shared.syl.read()));
+            _ => {
+                let key_behavior = match shared.options.lookup_strategy {
+                    LookupStrategy::FuzzyPartialPrefix => shared.syl.fuzzy_key_press(ev),
+                    LookupStrategy::Standard => shared.syl.key_press(ev),
+                };
+                match key_behavior {
+                    KeyBehavior::Absorb => self.spin_absorb(),
+                    KeyBehavior::Fuzzy(syl) => {
+                        if shared
+                            .dict
+                            .lookup_first_phrase(&[syl], shared.options.lookup_strategy)
+                            .is_some()
+                        {
+                            shared.com.insert(Symbol::from(syl));
+                        }
+                        self.spin_absorb()
                     }
-                    shared.syl.clear();
-                    self.start_entering()
+                    KeyBehavior::Commit => {
+                        if shared
+                            .dict
+                            .lookup_first_phrase(
+                                &[shared.syl.read()],
+                                shared.options.lookup_strategy,
+                            )
+                            .is_some()
+                        {
+                            shared.com.insert(Symbol::from(shared.syl.read()));
+                            shared.syl.clear();
+                            if shared.options.conversion_engine
+                                == ConversionEngineKind::SimpleEngine
+                            {
+                                self.start_selecting_simple_engine(shared)
+                            } else {
+                                self.start_entering()
+                            }
+                        } else {
+                            shared.syl.clear();
+                            self.start_entering()
+                        }
+                    }
+                    _ => self.spin_bell(),
                 }
-                _ => self.spin_bell(),
-            },
+            }
         }
     }
     fn as_any(&self) -> &dyn Any {
@@ -1170,9 +1234,27 @@ impl Selecting {
 
         let mut sel = PhraseSelector::new(
             !editor.options.phrase_choice_rearward,
+            editor.options.lookup_strategy,
             editor.com.to_composition(),
         );
         sel.init(editor.cursor(), &editor.dict);
+
+        Selecting {
+            page_no: 0,
+            action: SelectingAction::Replace,
+            sel: Selector::Phrase(sel),
+        }
+    }
+    fn new_phrase_for_simple_engine(editor: &mut SharedState) -> Self {
+        editor.com.push_cursor();
+        // editor.com.clamp_cursor();
+
+        let mut sel = PhraseSelector::new(
+            false,
+            editor.options.lookup_strategy,
+            editor.com.to_composition(),
+        );
+        sel.init_single_word(editor.cursor());
 
         Selecting {
             page_no: 0,
@@ -1213,20 +1295,9 @@ impl Selecting {
         }
     }
     fn total_page(&self, editor: &SharedState, dict: &Layered) -> usize {
-        // MSRV: stable after rust 1.73
-        fn div_ceil(lhs: usize, rhs: usize) -> usize {
-            let d = lhs / rhs;
-            let r = lhs % rhs;
-            if r > 0 && rhs > 0 {
-                d + 1
-            } else {
-                d
-            }
-        }
-        div_ceil(
-            self.candidates(editor, dict).len(),
-            editor.options.candidates_per_page,
-        )
+        self.candidates(editor, dict)
+            .len()
+            .div_ceil(editor.options.candidates_per_page)
     }
     fn select(&mut self, editor: &mut SharedState, n: usize) -> Transition {
         let offset = self.page_no * editor.options.candidates_per_page + n;
@@ -1304,7 +1375,7 @@ impl State for Selecting {
                 shared.cancel_selecting();
                 self.start_entering()
             }
-            Space if shared.options.space_is_select_key => {
+            Down | Space => {
                 if self.page_no + 1 < self.total_page(shared, &shared.dict) {
                     self.page_no += 1;
                 } else {
@@ -1316,17 +1387,6 @@ impl State for Selecting {
                         Selector::Symbol(_sel) => (),
                         Selector::SpecialSymmbol(_sel) => (),
                     }
-                }
-                self.spin_absorb()
-            }
-            Down => {
-                match &mut self.sel {
-                    Selector::Phrase(sel) => {
-                        sel.next(&shared.dict);
-                        self.page_no = 0;
-                    }
-                    Selector::Symbol(_sel) => (),
-                    Selector::SpecialSymmbol(_sel) => (),
                 }
                 self.spin_absorb()
             }
@@ -1344,6 +1404,7 @@ impl State for Selecting {
                 if sym.is_syllable() {
                     let mut sel = PhraseSelector::new(
                         !shared.options.phrase_choice_rearward,
+                        shared.options.lookup_strategy,
                         shared.com.to_composition(),
                     );
                     sel.init(shared.cursor(), &shared.dict);
@@ -1369,6 +1430,7 @@ impl State for Selecting {
                 if sym.is_syllable() {
                     let mut sel = PhraseSelector::new(
                         !shared.options.phrase_choice_rearward,
+                        shared.options.lookup_strategy,
                         shared.com.to_composition(),
                     );
                     sel.init(shared.cursor(), &shared.dict);
@@ -1497,7 +1559,7 @@ mod tests {
             vec![Box::new(TrieBuf::new_in_memory())],
             Box::new(TrieBuf::new_in_memory()),
         );
-        let conversion_engine = ChewingEngine::new();
+        let conversion_engine = Box::new(ChewingEngine::new());
         let estimate = LaxUserFreqEstimate::new(0);
         let abbrev = AbbrevTable::new();
         let sym_sel = SymbolSelector::default();
@@ -1524,7 +1586,7 @@ mod tests {
             vec![("冊", 100)],
         )]);
         let dict = Layered::new(vec![Box::new(dict)], Box::new(TrieBuf::new_in_memory()));
-        let conversion_engine = ChewingEngine::new();
+        let conversion_engine = Box::new(ChewingEngine::new());
         let estimate = LaxUserFreqEstimate::new(0);
         let abbrev = AbbrevTable::new();
         let sym_sel = SymbolSelector::default();
@@ -1557,7 +1619,7 @@ mod tests {
             vec![("冊", 100)],
         )]);
         let dict = Layered::new(vec![Box::new(dict)], Box::new(TrieBuf::new_in_memory()));
-        let conversion_engine = ChewingEngine::new();
+        let conversion_engine = Box::new(ChewingEngine::new());
         let estimate = LaxUserFreqEstimate::new(0);
         let abbrev = AbbrevTable::new();
         let sym_sel = SymbolSelector::default();
@@ -1600,7 +1662,7 @@ mod tests {
             vec![("冊", 100)],
         )]);
         let dict = Layered::new(vec![Box::new(dict)], Box::new(TrieBuf::new_in_memory()));
-        let conversion_engine = ChewingEngine::new();
+        let conversion_engine = Box::new(ChewingEngine::new());
         let estimate = LaxUserFreqEstimate::new(0);
         let abbrev = AbbrevTable::new();
         let sym_sel = SymbolSelector::default();
@@ -1658,7 +1720,7 @@ mod tests {
             vec![("冊", 100)],
         )]);
         let dict = Layered::new(vec![Box::new(dict)], Box::new(TrieBuf::new_in_memory()));
-        let conversion_engine = ChewingEngine::new();
+        let conversion_engine = Box::new(ChewingEngine::new());
         let estimate = LaxUserFreqEstimate::new(0);
         let abbrev = AbbrevTable::new();
         let sym_sel = SymbolSelector::default();
@@ -1696,13 +1758,13 @@ mod tests {
         let keyboard = Qwerty;
         let dict = TrieBuf::new_in_memory();
         let dict = Layered::new(vec![Box::new(dict)], Box::new(TrieBuf::new_in_memory()));
-        let conversion_engine = ChewingEngine::new();
+        let conversion_engine = Box::new(ChewingEngine::new());
         let estimate = LaxUserFreqEstimate::new(0);
         let abbrev = AbbrevTable::new();
         let sym_sel = SymbolSelector::default();
         let mut editor = Editor::new(conversion_engine, dict, estimate, abbrev, sym_sel);
 
-        editor.switch_character_form();
+        editor.shared.switch_character_form();
 
         let steps = [
             (

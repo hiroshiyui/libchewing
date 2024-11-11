@@ -10,7 +10,7 @@ use super::{KeyBehavior, SyllableEditor};
 const MAX_PINYIN_LEN: usize = 10;
 
 /// TODO: docs
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum PinyinVariant {
     /// TODO: docs
     #[default]
@@ -22,7 +22,7 @@ pub enum PinyinVariant {
 }
 
 /// TODO: docs
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct Pinyin {
     key_seq: String,
     syllable: Syllable,
@@ -88,36 +88,10 @@ impl SyllableEditor for Pinyin {
                 // buffer is full, ignore this keystroke
                 return KeyBehavior::NoWord;
             }
-            let ch = match key.code {
-                KeyCode::A => 'a',
-                KeyCode::B => 'b',
-                KeyCode::C => 'c',
-                KeyCode::D => 'd',
-                KeyCode::E => 'e',
-                KeyCode::F => 'f',
-                KeyCode::G => 'g',
-                KeyCode::H => 'h',
-                KeyCode::I => 'i',
-                KeyCode::J => 'j',
-                KeyCode::K => 'k',
-                KeyCode::L => 'l',
-                KeyCode::M => 'm',
-                KeyCode::N => 'n',
-                KeyCode::O => 'o',
-                KeyCode::P => 'p',
-                KeyCode::Q => 'q',
-                KeyCode::R => 'r',
-                KeyCode::S => 's',
-                KeyCode::T => 't',
-                KeyCode::U => 'u',
-                KeyCode::V => 'v',
-                KeyCode::W => 'w',
-                KeyCode::X => 'x',
-                KeyCode::Y => 'y',
-                KeyCode::Z => 'z',
-                _ => return KeyBehavior::KeyError,
-            };
-            self.key_seq.push(ch);
+            if !key.unicode.is_ascii_alphabetic() {
+                return KeyBehavior::KeyError;
+            }
+            self.key_seq.push(key.unicode);
             return KeyBehavior::Absorb;
         }
 
@@ -186,18 +160,24 @@ impl SyllableEditor for Pinyin {
         /* Hanyu empty rime
          * ㄓ/ㄔ/ㄕ/ㄖ/ㄗ/ㄘ/ㄙ + -i, -i is empty rime, not ㄧ
          * */
-        if matches!(
-            (medial, rime),
-            (Some(Bopomofo::I), None) | (None, Some(Bopomofo::I))
-        ) {
-            match initial {
-                Some(Bopomofo::ZH) | Some(Bopomofo::CH) | Some(Bopomofo::SH)
-                | Some(Bopomofo::R) | Some(Bopomofo::Z) | Some(Bopomofo::C) | Some(Bopomofo::S) => {
-                    medial.take();
-                    rime.take();
+        match self.variant {
+            PinyinVariant::HanyuPinyin => {
+                if matches!(
+                    (medial, rime),
+                    (Some(Bopomofo::I), None) | (None, Some(Bopomofo::I))
+                ) {
+                    match initial {
+                        Some(Bopomofo::ZH) | Some(Bopomofo::CH) | Some(Bopomofo::SH)
+                        | Some(Bopomofo::R) | Some(Bopomofo::Z) | Some(Bopomofo::C)
+                        | Some(Bopomofo::S) => {
+                            medial.take();
+                            rime.take();
+                        }
+                        _ => (),
+                    }
                 }
-                _ => (),
             }
+            _ => {}
         }
 
         /* Hanyu uan/un/u :
@@ -205,18 +185,21 @@ impl SyllableEditor for Pinyin {
          * ㄐ/ㄑ/ㄒ + -un,  -un is ㄩㄣ, not ㄨㄣ
          * ㄐ/ㄑ/ㄒ + -u,   -u is ㄧ, not ㄨ
          */
-        match initial {
-            Some(Bopomofo::J) | Some(Bopomofo::Q) | Some(Bopomofo::X) => {
-                match (medial, rime) {
-                    (Some(Bopomofo::U), Some(Bopomofo::AN))
-                    | (Some(Bopomofo::U), Some(Bopomofo::EN))
-                    | (Some(Bopomofo::U), None) => {
-                        medial.replace(Bopomofo::IU);
-                    }
-                    _ => (),
-                };
-            }
-            _ => (),
+        match self.variant {
+            PinyinVariant::HanyuPinyin => match initial {
+                Some(Bopomofo::J) | Some(Bopomofo::Q) | Some(Bopomofo::X) => {
+                    match (medial, rime) {
+                        (Some(Bopomofo::U), Some(Bopomofo::AN))
+                        | (Some(Bopomofo::U), Some(Bopomofo::EN))
+                        | (Some(Bopomofo::U), None) => {
+                            medial.replace(Bopomofo::IU);
+                        }
+                        _ => (),
+                    };
+                }
+                _ => (),
+            },
+            _ => {}
         }
 
         /* THL/MPS2 s/sh/c/ch/j :
@@ -226,40 +209,46 @@ impl SyllableEditor for Pinyin {
          * ch- + ㄧ/ㄩ, ch- is ㄑ, not ㄔ (THL)
          * j-  + other than ー/ㄩ, j-  is ㄓ, not ㄐ (MPS2)
          */
-        match medial {
-            Some(Bopomofo::I) | Some(Bopomofo::IU) => {
-                match initial {
-                    Some(Bopomofo::S) | Some(Bopomofo::SH) => {
-                        initial.replace(Bopomofo::X);
-                    }
-                    Some(Bopomofo::C) | Some(Bopomofo::CH) => {
-                        initial.replace(Bopomofo::Q);
-                    }
-                    _ => (),
-                };
-            }
-            _ => {
-                if initial == Some(Bopomofo::J) {
-                    initial.replace(Bopomofo::ZH);
+        match self.variant {
+            PinyinVariant::ThlPinyin | PinyinVariant::Mps2Pinyin => match medial {
+                Some(Bopomofo::I) | Some(Bopomofo::IU) => {
+                    match initial {
+                        Some(Bopomofo::S) | Some(Bopomofo::SH) => {
+                            initial.replace(Bopomofo::X);
+                        }
+                        Some(Bopomofo::C) | Some(Bopomofo::CH) => {
+                            initial.replace(Bopomofo::Q);
+                        }
+                        _ => (),
+                    };
                 }
-            }
+                _ => {
+                    if initial == Some(Bopomofo::J) {
+                        initial.replace(Bopomofo::ZH);
+                    }
+                }
+            },
+            PinyinVariant::HanyuPinyin => {}
         }
 
         /* THL supplemental set
          * ㄅ/ㄆ/ㄇ/ㄈ + -ㄨㄥ, -ㄨㄥ is another reading of -ㄥ
          * ㄅ/ㄆ/ㄇ/ㄈ + -ㄨㄛ, -ㄨㄛ is another reading of -ㄛ
          */
-        match initial {
-            Some(Bopomofo::B) | Some(Bopomofo::P) | Some(Bopomofo::M) | Some(Bopomofo::F) => {
-                match (medial, rime) {
-                    (Some(Bopomofo::U), Some(Bopomofo::ENG))
-                    | (Some(Bopomofo::U), Some(Bopomofo::O)) => {
-                        medial.take();
-                    }
-                    _ => (),
-                };
-            }
-            _ => (),
+        match self.variant {
+            PinyinVariant::ThlPinyin | PinyinVariant::Mps2Pinyin => match initial {
+                Some(Bopomofo::B) | Some(Bopomofo::P) | Some(Bopomofo::M) | Some(Bopomofo::F) => {
+                    match (medial, rime) {
+                        (Some(Bopomofo::U), Some(Bopomofo::ENG))
+                        | (Some(Bopomofo::U), Some(Bopomofo::O)) => {
+                            medial.take();
+                        }
+                        _ => (),
+                    };
+                }
+                _ => (),
+            },
+            _ => {}
         }
 
         self.key_seq.clear();
@@ -279,6 +268,10 @@ impl SyllableEditor for Pinyin {
         self.syllable = builder.build();
         self.syllable_alt = self.syllable;
         KeyBehavior::Commit
+    }
+
+    fn fuzzy_key_press(&mut self, key: KeyEvent) -> KeyBehavior {
+        self.key_press(key)
     }
 
     fn is_empty(&self) -> bool {
@@ -301,6 +294,10 @@ impl SyllableEditor for Pinyin {
 
     fn key_seq(&self) -> Option<String> {
         Some(self.key_seq.clone())
+    }
+
+    fn clone(&self) -> Box<dyn SyllableEditor> {
+        Box::new(Clone::clone(self))
     }
 }
 

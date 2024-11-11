@@ -2,7 +2,7 @@
  * test-bopomofo.c
  *
  * Copyright (c) 2012
- *      libchewing Core Team. See ChangeLog for details.
+ *      libchewing Core Team.
  *
  * See the file "COPYING" for information on usage and redistribution
  * of this file.
@@ -17,12 +17,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#ifdef WITH_RUST
-#include "chewing_rs.h"
-#else
-#include "key2pho-private.h"
-#include "bopomofo-private.h"
-#endif
+#include "chewing.h"
 
 #include "plat_types.h"
 #include "testhelper.h"
@@ -62,10 +57,10 @@ void test_select_candidate_no_rearward()
     type_keystroke_by_string(ctx, "<D>");       /* ㄧˊㄕㄤˋㄌㄞˊ */
     ok_candidate(ctx, CAND_1, ARRAY_SIZE(CAND_1));
 
-    type_keystroke_by_string(ctx, "<D>");       /* ㄕㄤˋㄌㄞˊ */
+    type_keystroke_by_string(ctx, "<D>");       /* 移上 */
     ok_candidate(ctx, CAND_2, ARRAY_SIZE(CAND_2));
 
-    type_keystroke_by_string(ctx, "<D><D>2<E>");        /* select 移上來 */
+    type_keystroke_by_string(ctx, "<D><L><D>2<E>");        /* select 移上來 */
     ok_commit_buffer(ctx, CAND_1[1]);
 
     chewing_delete(ctx);
@@ -108,7 +103,7 @@ void test_select_candidate_rearward()
     type_keystroke_by_string(ctx, "<D>");       /* ㄕㄤˋㄌㄞˊ */
     ok_candidate(ctx, CAND_2, ARRAY_SIZE(CAND_2));
 
-    type_keystroke_by_string(ctx, "<D><D>2<E>");        /* select 移上來 */
+    type_keystroke_by_string(ctx, "<D><L><D>2<E>");        /* select 移上來 */
     ok_commit_buffer(ctx, CAND_1[1]);
 
     chewing_delete(ctx);
@@ -473,7 +468,7 @@ void test_select_candidate_second_page_rewind()
     chewing_set_candPerPage(ctx, 9);
     chewing_set_spaceAsSelection(ctx, 1);
     chewing_set_phraseChoiceRearward(ctx, 1);
-    type_keystroke_by_string(ctx, "zp zp <D><D><R><D>"); /* ㄈㄣ ㄈㄣ */
+    type_keystroke_by_string(ctx, "zp zp <D><D><R><D><D>"); /* ㄈㄣ ㄈㄣ */
     ok_candidate(ctx, CAND, ARRAY_SIZE(CAND));
 
     chewing_delete(ctx);
@@ -588,7 +583,7 @@ void test_Del_word()
     chewing_set_maxChiSymbolLen(ctx, 16);
 
     type_keystroke_by_string(ctx, "hk4u g4<L><L><DC><E>");
-    ok_commit_buffer(ctx, "\xE6\xB8\xAC\xE8\xA9\xA6" /* 測試 */ );
+    ok_commit_buffer(ctx, "測試" );
 
     chewing_delete(ctx);
 }
@@ -659,7 +654,7 @@ void test_Backspace_word()
     chewing_set_maxChiSymbolLen(ctx, 16);
 
     type_keystroke_by_string(ctx, "hk4u g4<L><B><E>");
-    ok_commit_buffer(ctx, "\xE6\xB8\xAC\xE8\xA9\xA6" /* 測試 */ );
+    ok_commit_buffer(ctx, "測試" );
 
     chewing_delete(ctx);
 }
@@ -942,9 +937,10 @@ void test_Capslock()
     mode = chewing_get_ChiEngMode(ctx);
     ok(mode == SYMBOL_MODE, "mode shall change to SYMBOL_MODE");
 
-    ok_bopomofo_buffer(ctx, "");
-    ok_preedit_buffer(ctx, "");
-    ok_commit_buffer(ctx, "");
+    type_keystroke_by_string(ctx, "<CB>");
+
+    mode = chewing_get_ChiEngMode(ctx);
+    ok(mode == CHINESE_MODE, "mode shall change to CHINESE_MODE");
 
     chewing_delete(ctx);
 }
@@ -1106,6 +1102,48 @@ void test_ShiftSpace()
     chewing_set_ChiEngMode(ctx, SYMBOL_MODE);
     type_keystroke_by_string(ctx, "a");
     ok_commit_buffer(ctx, "\xEF\xBD\x81"); /* Fullshape a */
+
+    chewing_set_ChiEngMode(ctx, CHINESE_MODE);
+    type_keystroke_by_string(ctx, "<SS>");
+    mode = chewing_get_ShapeMode(ctx);
+    ok(mode == HALFSHAPE_MODE, "mode shall be HALFSHAPE_MODE");
+
+    type_keystroke_by_string(ctx, " ");
+    ok_commit_buffer(ctx, " ");
+
+    type_keystroke_by_string(ctx, "hk4 <E>");
+    ok_commit_buffer(ctx, "冊 ");
+
+    chewing_set_ChiEngMode(ctx, SYMBOL_MODE);
+    type_keystroke_by_string(ctx, "a ");
+    ok_commit_buffer(ctx, " ");
+
+    chewing_delete(ctx);
+}
+
+void test_ShiftSpaceDisabled()
+{
+    ChewingContext *ctx;
+    int mode;
+
+    ctx = chewing_new();
+    start_testcase(ctx, fd);
+
+    chewing_config_set_int(ctx, "chewing.enable_fullwidth_toggle_key", 0);
+
+    mode = chewing_get_ShapeMode(ctx);
+    ok(mode == HALFSHAPE_MODE, "mode shall be HALFSHAPE_MODE");
+
+    type_keystroke_by_string(ctx, "<SS>");
+    mode = chewing_get_ShapeMode(ctx);
+    ok(mode == HALFSHAPE_MODE, "mode shall be HALFSHAPE_MODE");
+
+    type_keystroke_by_string(ctx, " ");
+    ok_commit_buffer(ctx, " "); /* Space */
+
+    chewing_set_ChiEngMode(ctx, SYMBOL_MODE);
+    type_keystroke_by_string(ctx, "a");
+    ok_commit_buffer(ctx, "a"); /* a */
 
     chewing_set_ChiEngMode(ctx, CHINESE_MODE);
     type_keystroke_by_string(ctx, "<SS>");
@@ -1304,6 +1342,95 @@ void test_Space()
     test_Space_selection_word();
     test_Space_selection_symbol();
     test_Space_selection_insert_eng_mode();
+}
+
+void test_FuzzySearchMode()
+{
+    const TestData FUZZY_INPUT[] = {
+        {"eji6aup6284cjo42941ul3<E>", "國民大會代表" },
+        {"eji aup 28 cjo 29 1ul <E>", "國民大會代表" },
+        {"ej au 2 cj 2 1 <E>", "國民大會代表" },
+        {"e a 2 c 2 1 <E>", "國民大會代表" },
+        {"ea2c21 <E>", "國民大會代表" },
+    };
+    size_t i;
+    ChewingContext *ctx;
+
+    ctx = chewing_new();
+    start_testcase(ctx, fd);
+    chewing_set_maxChiSymbolLen(ctx, 16);
+    chewing_config_set_int(ctx, "chewing.conversion_engine", FUZZY_CHEWING_CONVERSION_ENGINE);
+
+    for (i = 0; i < ARRAY_SIZE(FUZZY_INPUT); ++i) {
+        type_keystroke_by_string(ctx, FUZZY_INPUT[i].token);
+        ok_commit_buffer(ctx, FUZZY_INPUT[i].expected);
+    }
+
+    chewing_delete(ctx);
+}
+
+void test_FuzzySearchMode_Hanyu()
+{
+    const TestData FUZZY_INPUT[] = {
+        {"guo2min2da4hui4dai4biao3<E>", "國民大會代表" },
+        {"guo min da hui dai biao <E>", "國民大會代表" },
+        {"g m d h d b <E>", "國民大會代表" },
+    };
+    size_t i;
+    ChewingContext *ctx;
+
+    ctx = chewing_new();
+    start_testcase(ctx, fd);
+    chewing_set_maxChiSymbolLen(ctx, 16);
+    chewing_set_KBType(ctx, KB_HANYU_PINYIN);
+    chewing_config_set_int(ctx, "chewing.conversion_engine", FUZZY_CHEWING_CONVERSION_ENGINE);
+
+    for (i = 0; i < ARRAY_SIZE(FUZZY_INPUT); ++i) {
+        type_keystroke_by_string(ctx, FUZZY_INPUT[i].token);
+        ok_commit_buffer(ctx, FUZZY_INPUT[i].expected);
+    }
+
+    chewing_delete(ctx);
+}
+
+void test_SimpleEngine()
+{
+    const TestData SIMPLE_INPUT[] = {
+        {"ru03120 15j41up 1ai61g41!<E>", "簡單住因模市！" },
+        {"ru03<EE>20 <EE>5j4<EE>up <EE>ai6<EE>g4<EE>!<E>", "簡單住因模市！" },
+        {"ru03120 15j44up 2ai61g4<D>2!<E>", "簡單注音模式！" },
+        {"ru03120 15j44up 2ai61g4<D>2!<H>20 1tjp61<E>", "單純簡單注音模式！" },
+    };
+    size_t i;
+    ChewingContext *ctx;
+
+    ctx = chewing_new();
+    start_testcase(ctx, fd);
+    chewing_set_maxChiSymbolLen(ctx, 16);
+    chewing_config_set_int(ctx, "chewing.conversion_engine", SIMPLE_CONVERSION_ENGINE);
+
+    for (i = 0; i < ARRAY_SIZE(SIMPLE_INPUT); ++i) {
+        type_keystroke_by_string(ctx, SIMPLE_INPUT[i].token);
+        ok_commit_buffer(ctx, SIMPLE_INPUT[i].expected);
+    }
+
+    chewing_delete(ctx);
+}
+
+void test_Acknowledge()
+{
+    ChewingContext *ctx;
+
+    ctx = chewing_new();
+    start_testcase(ctx, fd);
+
+    type_keystroke_by_string(ctx, "hk4g4<E>");
+    ok_commit_buffer(ctx, "測試");
+
+    chewing_ack(ctx);
+    ok_commit_buffer(ctx, "");
+
+    chewing_delete(ctx);
 }
 
 void test_get_phoneSeq()
@@ -1654,7 +1781,7 @@ void test_KB_HSU_example()
     ok_preedit_buffer(ctx, "一隻隻可愛的小花貓");
     chewing_clean_preedit_buf(ctx);
 
-    type_keystroke_by_string(ctx, "sm sxajdwj<D><D>1xfsxajdgscewfhidxfdwj<D><D>1cd<D><D>1rnd");
+    type_keystroke_by_string(ctx, "sm sxajdwj<D><D>1xfsxajdgscewfhidxfdwj<D><D>1cd<D>1rnd");
     ok_preedit_buffer(ctx, "三歲到五歲的小孩五到十人");
     chewing_clean_preedit_buf(ctx);
 
@@ -2318,8 +2445,13 @@ int main(int argc, char *argv[])
     test_PageUp();
     test_PageDown();
     test_ShiftSpace();
+    test_ShiftSpaceDisabled();
     test_Numlock();
     test_Space();
+    test_FuzzySearchMode();
+    test_FuzzySearchMode_Hanyu();
+    test_SimpleEngine();
+    test_Acknowledge();
 
     test_get_phoneSeq();
     test_bopomofo_buffer();

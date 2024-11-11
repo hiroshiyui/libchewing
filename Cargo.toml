@@ -3,8 +3,8 @@ name = "chewing"
 description = "The Chewing (酷音) intelligent Zhuyin input method."
 documentation = "https://docs.rs/chewing"
 license = "LGPL-2.1-or-later"
-version = "0.8.5"
-rust-version = "1.70"
+version = "0.9.1"
+rust-version = "1.77.0"
 edition = "2021"
 
 include = [
@@ -23,9 +23,6 @@ directories = "5.0.0"
 log = { workspace = true }
 rusqlite = { version = ">= 0.28.0", optional = true }
 
-[target.'cfg(windows)'.dependencies]
-rusqlite = { version = ">= 0.28.0", features = ["bundled"], optional = true }
-
 [dev-dependencies]
 tempfile = { workspace = true }
 
@@ -42,6 +39,8 @@ log = "0.4.21"
 tempfile = "3.10.1"
 
 [profile.release]
+lto = true
+opt-level = 3
 panic = "abort"
 codegen-units = 1
 debug = true

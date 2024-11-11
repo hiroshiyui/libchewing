@@ -13,9 +13,10 @@ use crate::zhuyin::{Syllable, SyllableSlice};
 
 use super::{
     BuildDictionaryError, Dictionary, DictionaryBuilder, DictionaryInfo, DictionaryMut, Entries,
-    Phrase, Trie, TrieBuilder, UpdateDictionaryError,
+    LookupStrategy, Phrase, Trie, TrieBuilder, UpdateDictionaryError,
 };
 
+/// A mutable dictionary backed by a Trie and a BTreeMap.
 #[derive(Debug)]
 pub struct TrieBuf {
     trie: Option<Trie>,
@@ -35,6 +36,7 @@ fn software_version() -> String {
 }
 
 impl TrieBuf {
+    /// Open the target Trie dictionary and wrap it create a TrieBuf.
     pub fn open<P: Into<PathBuf>>(path: P) -> io::Result<TrieBuf> {
         let path = path.into();
         if !path.exists() {
@@ -63,6 +65,7 @@ impl TrieBuf {
         })
     }
 
+    /// Creates a pure in memory dictionary.
     pub fn new_in_memory() -> TrieBuf {
         TrieBuf {
             trie: None,
@@ -76,6 +79,7 @@ impl TrieBuf {
     pub(crate) fn entries_iter_for<'a>(
         &'a self,
         syllables: &'a dyn SyllableSlice,
+        strategy: LookupStrategy,
     ) -> impl Iterator<Item = Phrase> + 'a {
         let syllable_key = Cow::from(syllables.to_slice().into_owned());
         let min_key = (syllable_key.clone(), Cow::from(MIN_PHRASE));
@@ -83,7 +87,7 @@ impl TrieBuf {
         let store_iter = self
             .trie
             .iter()
-            .flat_map(move |trie| trie.lookup_all_phrases(syllables));
+            .flat_map(move |trie| trie.lookup_all_phrases(syllables, strategy));
         let btree_iter = self
             .btree
             .range(min_key..max_key)
@@ -127,11 +131,12 @@ impl TrieBuf {
         &self,
         syllables: &dyn SyllableSlice,
         first: usize,
+        strategy: LookupStrategy,
     ) -> Vec<Phrase> {
         let mut sort_map = BTreeMap::new();
         let mut phrases: Vec<Phrase> = Vec::new();
 
-        for phrase in self.entries_iter_for(syllables) {
+        for phrase in self.entries_iter_for(syllables, strategy) {
             match sort_map.entry(phrase.to_string()) {
                 Entry::Occupied(entry) => {
                     let index = *entry.get();
@@ -158,7 +163,7 @@ impl TrieBuf {
     ) -> Result<(), UpdateDictionaryError> {
         let syllable_slice = syllables.to_slice();
         if self
-            .entries_iter_for(&syllable_slice.as_ref())
+            .entries_iter_for(&syllable_slice.as_ref(), LookupStrategy::Standard)
             .any(|ph| ph.as_str() == phrase.as_str())
         {
             return Err(UpdateDictionaryError { source: None });
@@ -293,8 +298,13 @@ impl From<BuildDictionaryError> for UpdateDictionaryError {
 }
 
 impl Dictionary for TrieBuf {
-    fn lookup_first_n_phrases(&self, syllables: &dyn SyllableSlice, first: usize) -> Vec<Phrase> {
-        TrieBuf::lookup_first_n_phrases(self, syllables, first)
+    fn lookup_first_n_phrases(
+        &self,
+        syllables: &dyn SyllableSlice,
+        first: usize,
+        strategy: LookupStrategy,
+    ) -> Vec<Phrase> {
+        TrieBuf::lookup_first_n_phrases(self, syllables, first, strategy)
     }
 
     fn entries(&self) -> Entries<'_> {
@@ -381,7 +391,7 @@ mod tests {
     use std::error::Error;
 
     use crate::{
-        dictionary::{DictionaryMut, Phrase},
+        dictionary::{DictionaryMut, LookupStrategy, Phrase},
         syl,
         zhuyin::Bopomofo::*,
     };
@@ -401,7 +411,10 @@ mod tests {
         assert_eq!("Unknown", info.copyright);
         assert_eq!(
             Some(("dict", 1, 2).into()),
-            dict.lookup_first_phrase(&[syl![Z, TONE4], syl![D, I, AN, TONE3]])
+            dict.lookup_first_phrase(
+                &[syl![Z, TONE4], syl![D, I, AN, TONE3]],
+                LookupStrategy::Standard
+            )
         );
         Ok(())
     }
@@ -424,7 +437,10 @@ mod tests {
         assert_eq!("Unknown", info.copyright);
         assert_eq!(
             Some(("dict", 1, 2).into()),
-            dict.lookup_first_phrase(&[syl![Z, TONE4], syl![D, I, AN, TONE3]])
+            dict.lookup_first_phrase(
+                &[syl![Z, TONE4], syl![D, I, AN, TONE3]],
+                LookupStrategy::Standard
+            )
         );
         Ok(())
     }

@@ -1,6 +1,8 @@
 //! Algorithms to convert syllables to Chinese characters.
 
 mod chewing;
+mod fuzzy;
+mod simple;
 mod symbol;
 
 use std::{
@@ -9,21 +11,41 @@ use std::{
     fmt::Debug,
 };
 
-use crate::zhuyin::{Syllable, SyllableSlice};
+use crate::{
+    dictionary::Dictionary,
+    zhuyin::{Syllable, SyllableSlice},
+};
 
 pub use self::chewing::ChewingEngine;
+pub use self::fuzzy::FuzzyChewingEngine;
+pub use self::simple::SimpleEngine;
 pub(crate) use self::symbol::{full_width_symbol_input, special_symbol_input};
 
-/// TODO: doc
+/// Converts a composition buffer to list of intervals.
+///
+/// [`Composition`] contains all user inputs and selection information. The out
+/// put intervals should cover the whole range of inputs, sorted in first in
+/// first out order.
+pub trait ConversionEngine: Debug {
+    fn convert<'a>(
+        &'a self,
+        dict: &'a dyn Dictionary,
+        comp: &'a Composition,
+    ) -> Box<dyn Iterator<Item = Vec<Interval>> + 'a>;
+}
+
+/// Output of conversion.
+///
+/// Interval represents a segment of input buffer converted to a phrase.
 #[derive(Default, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 pub struct Interval {
-    /// TODO: doc
+    /// The starting offset of the interval.
     pub start: usize,
-    /// TODO: doc
+    /// The end (exclusive) of the interval.
     pub end: usize,
-    // TODO doc
+    /// Whether the output is a phrase from dictionary or just symbols.
     pub is_phrase: bool,
-    /// TODO: doc
+    /// The output string.
     pub str: Box<str>,
 }
 
@@ -37,7 +59,7 @@ impl Debug for Interval {
 }
 
 impl Interval {
-    /// TODO: doc
+    /// Whether the interval covers the whole range of the other interval.
     pub fn contains(&self, other: &Interval) -> bool {
         self.contains_range(other.start, other.end)
     }
@@ -47,17 +69,18 @@ impl Interval {
     fn is_contained_by(&self, start: usize, end: usize) -> bool {
         start <= self.start && end >= self.end
     }
+    /// Whether the interval covers the part of the other interval.
     pub fn intersect(&self, other: &Interval) -> bool {
         self.intersect_range(other.start, other.end)
     }
     fn intersect_range(&self, start: usize, end: usize) -> bool {
         max(self.start, start) < min(self.end, end)
     }
-    /// TODO: doc
+    /// The length of the interval.
     pub fn len(&self) -> usize {
         self.end - self.start
     }
-    /// TODO: doc
+    /// Whether the interval is empty (no output).
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -151,13 +174,14 @@ impl SyllableSlice for Vec<Symbol> {
     }
 }
 
-/// TODO: doc
+/// Input data collected by the Editor.
 #[derive(Debug, Default, Clone)]
 pub struct Composition {
-    /// TODO: doc
+    /// Pre-edit inputs either syllables or symbols.
     symbols: Vec<Symbol>,
+    /// User indicates offset that shouldn't form a phrase.
     gaps: Vec<Gap>,
-    /// TODO: doc
+    /// User set constraint on that output must match.
     selections: Vec<Interval>,
 }
 
@@ -328,13 +352,3 @@ impl Composition {
         self.selections.clear();
     }
 }
-
-// /// TODO: doc
-// pub trait ConversionEngine<C: ?Sized> {
-//     /// TODO: doc, combine convert_next as an Iterator
-//     fn convert(
-//         &self,
-//         context: &C,
-//         composition: &Composition,
-//     ) -> impl Iterator<Item = Vec<Interval>>;
-// }

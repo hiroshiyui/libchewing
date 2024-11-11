@@ -2,12 +2,13 @@
  * test-config.c
  *
  * Copyright (c) 2012
- *      libchewing Core Team. See ChangeLog for details.
+ *      libchewing Core Team.
  *
  * See the file "COPYING" for information on usage and redistribution
  * of this file.
  */
 
+#include <stdio.h>
 #ifdef HAVE_CONFIG_H
 #    include <config.h>
 #endif
@@ -22,8 +23,6 @@
 static const int MIN_CAND_PER_PAGE = 1;
 static const int MAX_CAND_PER_PAGE = 10;
 static const int DEFAULT_CAND_PER_PAGE = 10;
-static const int MIN_CHI_SYMBOL_LEN = 0;
-static const int MAX_CHI_SYMBOL_LEN = 39;
 
 static const int DEFAULT_SELECT_KEY[] = {
     '1', '2', '3', '4', '5', '6', '7', '8', '9', '0'
@@ -36,6 +35,38 @@ static const int ALTERNATE_SELECT_KEY[] = {
 static const TestData DATA = { "`a", "\xE2\x80\xA6" /* … */  };
 
 FILE *fd;
+
+void test_has_option()
+{
+    ChewingContext *ctx;
+
+    static const char *options[] = {
+        "chewing.user_phrase_add_direction"
+        ,"chewing.disable_auto_learn_phrase"
+        ,"chewing.auto_shift_cursor"
+        ,"chewing.candidates_per_page"
+        ,"chewing.language_mode"
+        ,"chewing.easy_symbol_input"
+        ,"chewing.esc_clear_all_buffer"
+        ,"chewing.keyboard_type"
+        ,"chewing.auto_commit_threshold"
+        ,"chewing.phrase_choice_rearward"
+        ,"chewing.selection_keys"
+        ,"chewing.character_form"
+        ,"chewing.space_is_select_key"
+        ,"chewing.conversion_engine"
+        ,"chewing.enable_fullwidth_toggle_key"
+    };
+
+    ctx = chewing_new();
+    start_testcase(ctx, fd);
+
+    for (int i = 0; i < ARRAY_SIZE(options); ++i) {
+        ok(chewing_config_has_option(ctx, options[i]) == 1, "should have option '%s'", options[i]);
+    }
+
+    chewing_delete(ctx);
+}
 
 void test_default_value()
 {
@@ -77,6 +108,64 @@ END_IGNORE_DEPRECATIONS
     ok(chewing_get_ChiEngMode(ctx) == CHINESE_MODE, "default ChiEngMode shall be CHINESE_MODE");
 
     ok(chewing_get_ShapeMode(ctx) == HALFSHAPE_MODE, "default ShapeMode shall be HALFSHAPE_MODE");
+
+    chewing_delete(ctx);
+}
+
+void test_default_value_options()
+{
+    char *select_key;
+    ChewingContext *ctx;
+
+    ctx = chewing_new();
+    start_testcase(ctx, fd);
+
+    ok(chewing_config_get_str(ctx, "chewing.selection_keys", &select_key) == 0,
+        "chewing_config_get_str should return OK");
+    ok(select_key, "chewing_config_get_str shall not return NULL");
+    ok(!memcmp(select_key, "1234567890", 10),
+        "default select key shall be default value");
+    chewing_free(select_key);
+
+    ok(chewing_config_get_int(ctx,
+            "chewing.candidates_per_page") == DEFAULT_CAND_PER_PAGE,
+        "default candPerPage shall be %d",
+        DEFAULT_CAND_PER_PAGE);
+
+    ok(chewing_config_get_int(ctx,
+            "chewing.auto_commit_threshold") == MAX_CHI_SYMBOL_LEN,
+       "default chewing.auto_commit_threshold shall be %d",
+       MAX_CHI_SYMBOL_LEN);
+
+    ok(chewing_config_get_int(ctx, "chewing.user_phrase_add_direction") == 0,
+        "default chewing.user_phrase_add_direction shall be 0");
+
+    ok(chewing_config_get_int(ctx, "chewing.space_is_select_key") == 0,
+        "default chewing.space_is_select_key shall be 0");
+
+    ok(chewing_config_get_int(ctx, "chewing.esc_clear_all_buffer") == 0,
+        "default chewing.esc_clear_all_buffer shall be 0");
+
+    ok(chewing_config_get_int(ctx, "chewing.auto_shift_cursor") == 0,
+        "default chewing.auto_shift_cursor shall be 0");
+
+    ok(chewing_config_get_int(ctx, "chewing.easy_symbol_input") == 0,
+        "default chewing.easy_symbol_input shall be 0");
+
+    ok(chewing_config_get_int(ctx, "chewing.phrase_choice_rearward") == 0,
+        "default chewing.phrase_choice_rearward shall be 0");
+
+    ok(chewing_config_get_int(ctx, "chewing.disable_auto_learn_phrase") == 0,
+        "default chewing.disable_auto_learn_phrase shall be 0");
+
+    ok(chewing_config_get_int(ctx, "chewing.language_mode") == CHINESE_MODE,
+        "default chewing.language_mode shall be %d", CHINESE_MODE);
+
+    ok(chewing_config_get_int(ctx, "chewing.character_form") == HALFSHAPE_MODE,
+        "default chewing.character_form shall be %d", HALFSHAPE_MODE);
+
+    ok(chewing_config_get_int(ctx, "chewing.conversion_engine") == 1,
+        "default chewing.fuzzy_search_mode shall be 1");
 
     chewing_delete(ctx);
 }
@@ -179,6 +268,7 @@ void test_set_selKey_normal()
 {
     ChewingContext *ctx;
     int *select_key;
+    char *select_key_str;
 
     ctx = chewing_new();
     start_testcase(ctx, fd);
@@ -195,6 +285,15 @@ void test_set_selKey_normal()
 
     chewing_free(select_key);
 
+    ok(chewing_config_set_str(ctx, "chewing.selection_keys", "asdfghjkl;") == 0,
+        "chewing_config_set_str should return OK");
+    ok(chewing_config_get_str(ctx, "chewing.selection_keys", &select_key_str) == 0,
+        "chewing_config_get_str should return OK");
+    ok(select_key_str, "chewing_config_get_str shall not return NULL");
+    ok(!memcmp(select_key_str, "asdfghjkl;", 10),
+        "select key shall be updated");
+    chewing_free(select_key_str);
+
     chewing_delete(ctx);
 }
 
@@ -202,6 +301,7 @@ void test_set_selKey_error_handling()
 {
     ChewingContext *ctx;
     int *select_key;
+    char *select_key_str;
 
     ctx = chewing_new();
     start_testcase(ctx, fd);
@@ -229,6 +329,15 @@ void test_set_selKey_error_handling()
     ok(select_key, "chewing_get_selKey shall not return NULL");
     ok(!memcmp(select_key, DEFAULT_SELECT_KEY, sizeof(DEFAULT_SELECT_KEY)), "select key shall be DEFAULT_SELECT_KEY");
     chewing_free(select_key);
+
+    ok(chewing_config_set_str(ctx, "chewing.selection_keys", "asdfghjkl;1234") == -1,
+        "chewing_config_set_str should return ERROR");
+    ok(chewing_config_get_str(ctx, "chewing.selection_keys", &select_key_str) == 0,
+        "chewing_config_get_str should return OK");
+    ok(select_key_str, "chewing_config_get_str shall not return NULL");
+    ok(!memcmp(select_key_str, "1234567890", 10),
+        "select key shall be default value");
+    chewing_free(select_key_str);
 
     chewing_delete(ctx);
 }
@@ -570,7 +679,9 @@ void test_new2_syspath_error()
     fprintf(fd, "#\n# %s\n#\n", __func__);
 
     ctx = chewing_new2("NoSuchPath", NULL, logger, fd);
-    ok(ctx == NULL, "chewing_new2 returns `%#p' shall be `%#p'", ctx, NULL);
+    ok(ctx != NULL, "chewing_new2 returns `%#p' shall be `%#p'", ctx, NULL);
+
+    chewing_delete(ctx);
 }
 
 void test_new2_syspath()
@@ -619,6 +730,36 @@ void test_new2()
     test_new2_userpath();
 }
 
+void test_runtime_version()
+{
+    char buf[256];
+    int major = chewing_version_major();
+    int minor = chewing_version_minor();
+    int patch = chewing_version_patch();
+    const char *extra = chewing_version_extra();
+    const char *version = chewing_version();
+
+    ok(version != NULL, "chewing_version returns a version string");
+
+    sprintf(buf, "%d.%d.%d%s", major, minor, patch, extra);
+    ok(strcmp(buf, version) == 0, "chewing_version can be created from components");
+}
+
+void test_dictionary_d()
+{
+    ChewingContext *ctx;
+
+    ctx = chewing_new2(TEST_DATA_DIR, NULL, logger, fd);
+    start_testcase(ctx, fd);
+
+    ok(ctx != NULL, "chewing_new2 returns `%#p' shall not be `%#p'", ctx, NULL);
+
+    type_keystroke_by_string(ctx, "k6j94<E>");
+    ok_commit_buffer(ctx, "額外");
+
+    chewing_delete(ctx);
+}
+
 int main(int argc, char *argv[])
 {
     char *logname;
@@ -635,7 +776,9 @@ int main(int argc, char *argv[])
     free(logname);
 
 
+    test_has_option();
     test_default_value();
+    test_default_value_options();
 
     test_set_candPerPage();
     test_set_maxChiSymbolLen();
@@ -654,6 +797,10 @@ int main(int argc, char *argv[])
     test_deprecated();
 
     test_new2();
+
+    test_runtime_version();
+
+    test_dictionary_d();
 
     fclose(fd);
 

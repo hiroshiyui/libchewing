@@ -15,6 +15,12 @@ pub const SYMBOL_MODE: c_int = 0;
 pub const FULLSHAPE_MODE: c_int = 1;
 /// Indicates chewing will not translate latin and puctuation characters.
 pub const HALFSHAPE_MODE: c_int = 0;
+/// Use conversion engine that doesn't perform intelligent phrasing.
+pub const SIMPLE_CONVERSION_ENGINE: c_int = 0;
+/// Use the original Chewing intelligent phrasing.
+pub const CHEWING_CONVERSION_ENGINE: c_int = 1;
+/// Use original Chewing intelligent phrasing with fuzzy prefix search.
+pub const FUZZY_CHEWING_CONVERSION_ENGINE: c_int = 2;
 /// Indicates automatic user phrase learning is disabled.
 pub const AUTOLEARN_DISABLED: usize = 1;
 /// Indicates automatic user phrase learning is enabled.
@@ -50,6 +56,11 @@ pub const HSU_SELKEY_TYPE1: usize = 1;
 /// Use "asdfzxcv89" as selection key.
 #[deprecated]
 pub const HSU_SELKEY_TYPE2: usize = 2;
+
+pub const KEYSTROKE_IGNORE: usize = 1;
+pub const KEYSTROKE_COMMIT: usize = 2;
+pub const KEYSTROKE_BELL: usize = 4;
+pub const KEYSTROKE_ABSORB: usize = 8;
 
 /// Configuration for chewing runtime features.
 ///
@@ -102,6 +113,9 @@ pub enum KB {
     ThlPinyin,
     Mps2Pinyin,
     Carpalx,
+    ColemakDhAnsi,
+    ColemakDhOrth,
+    Workman,
 }
 
 /// Opaque context handle used for chewing APIs.

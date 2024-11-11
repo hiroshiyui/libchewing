@@ -31,10 +31,15 @@ major operating environments.
    - Coverity Scan: [![Coverity Scan Build Status](https://scan.coverity.com/projects/1273/badge.svg)](https://scan.coverity.com/projects/1273)
    - Codecov: [![codecov](https://codecov.io/gh/chewing/libchewing/graph/badge.svg?token=r1piKsG5uF)](https://codecov.io/gh/chewing/libchewing)
 
-libchewing releases can be verified with the following [minisign][] public key
+libchewing releases can be verified with the following OpenPGP public key
 
-    RWRzJFnXiLZleAyCIv1talBjyRewelcy9gzYQq9pd3SKSFBPoy57sf5s
+&emsp;[083B3CAB64267E5BAB7159673EF0C673DADCC30C][pgp_key] Libchewing Signing Key &lt;release@chewing.im&gt;
 
+or the following [minisign][] public key
+
+&emsp;RWRzJFnXiLZleAyCIv1talBjyRewelcy9gzYQq9pd3SKSFBPoy57sf5s
+
+[pgp_key]: https://chewing.im/.well-known/openpgpkey/hu/y84sdmnksfqswe7fxf5mzjg53tbdz8f5?l=release
 [minisign]: https://jedisct1.github.io/minisign/
 
 ## Status
@@ -100,8 +105,9 @@ be built.
    - cmake >= 3.21.0
 + Toolchain / IDE:
    - clang >= 3.2 OR gcc >= 4.6.3
-   - Rust >= 1.70
+   - Rust >= 1.77
    - Build Tools for Visual Studio 2022 for MSVC build
+   - Vcpkg for MSVC build
 + Documentation tools:
    - texinfo >= 4.8
 
@@ -185,7 +191,7 @@ To ensure libchewing can be built on various Linux distributions, we use the
 minimum rust version available from major distributions' next release branch.
 Data source: https://repology.org/project/rust/versions
 
-* Current MSRV: 1.70.0 (Debian unstable)
+* Current MSRV: 1.77.0 (Debian unstable)
 
 
 ## Usage

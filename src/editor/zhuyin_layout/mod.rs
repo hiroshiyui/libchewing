@@ -78,10 +78,21 @@ pub enum KeyboardLayoutCompat {
     ColemakDhAnsi,
     /// TODO: docs
     ColemakDhOrth,
+    /// Workman standard layout
+    Workman,
+}
+
+#[derive(Debug)]
+pub struct ParseKeyboardLayoutError;
+
+impl Display for ParseKeyboardLayoutError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Unable to parse keyboard layout")
+    }
 }
 
 impl FromStr for KeyboardLayoutCompat {
-    type Err = ();
+    type Err = ParseKeyboardLayoutError;
 
     fn from_str(kb_str: &str) -> Result<Self, Self::Err> {
         let layout = match kb_str {
@@ -100,7 +111,8 @@ impl FromStr for KeyboardLayoutCompat {
             "KB_CARPALX" => Self::Carpalx,
             "KB_COLEMAK_DH_ANSI" => Self::ColemakDhAnsi,
             "KB_COLEMAK_DH_ORTH" => Self::ColemakDhOrth,
-            _ => todo!("handle error"),
+            "KB_WORKMAN" => Self::Workman,
+            _ => return Err(ParseKeyboardLayoutError),
         };
         Ok(layout)
     }
@@ -124,6 +136,7 @@ impl Display for KeyboardLayoutCompat {
             KeyboardLayoutCompat::Carpalx => f.write_str("KB_CARPALX"),
             KeyboardLayoutCompat::ColemakDhAnsi => f.write_str("KB_COLEMAK_DH_ANSI"),
             KeyboardLayoutCompat::ColemakDhOrth => f.write_str("KB_COLEMAK_DH_ORTH"),
+            KeyboardLayoutCompat::Workman => f.write_str("KB_WORKMAN"),
         }
     }
 }
@@ -148,6 +161,7 @@ impl TryFrom<u8> for KeyboardLayoutCompat {
             12 => Self::Carpalx,
             13 => Self::ColemakDhAnsi,
             14 => Self::ColemakDhOrth,
+            15 => Self::Workman,
             _ => return Err(()),
         })
     }
@@ -156,10 +170,9 @@ impl TryFrom<u8> for KeyboardLayoutCompat {
 /// TODO: docs
 /// TODO: move this to the editor module
 #[derive(Debug, PartialEq)]
-#[repr(C)]
 pub enum KeyBehavior {
     /// TODO: docs
-    Ignore = 0,
+    Ignore,
     /// TODO: docs
     Absorb,
     /// TODO: docs
@@ -172,12 +185,39 @@ pub enum KeyBehavior {
     NoWord,
     /// TODO: docs
     OpenSymbolTable,
+    /// Fuzzed Syllable
+    Fuzzy(Syllable),
 }
 
 /// TODO: docs
 pub trait SyllableEditor: Debug {
     /// Handles a key press event and returns the behavior of the layout.
     fn key_press(&mut self, key: KeyEvent) -> KeyBehavior;
+    /// Handles a key press event and returns the behavior of the layout.
+    ///
+    /// If a syllable is completed prematurely due to fuzzy logic, a
+    /// `Fuzzy(Syllable)` will be returned.
+    fn fuzzy_key_press(&mut self, key: KeyEvent) -> KeyBehavior {
+        if self.is_empty() {
+            return self.key_press(key);
+        }
+        let mut clone = self.clone();
+        clone.clear();
+        clone.key_press(key);
+        let current_syl = self.read();
+        let new_syl = clone.read();
+        if current_syl.has_initial() && new_syl.has_initial()
+            || current_syl.has_medial() && (new_syl.has_initial() || new_syl.has_medial())
+            || current_syl.has_rime()
+                && (new_syl.has_initial() || new_syl.has_medial() || new_syl.has_rime())
+        {
+            let ret = KeyBehavior::Fuzzy(current_syl);
+            self.clear();
+            self.key_press(key);
+            return ret;
+        }
+        return self.key_press(key);
+    }
     /// Removes the last input from the buffer.
     fn remove_last(&mut self);
     /// Clears the phonetic key buffer, removing all values.
@@ -195,4 +235,6 @@ pub trait SyllableEditor: Debug {
         let _ = syl;
         &[]
     }
+    // Returns a copy of the SyllableEditor
+    fn clone(&self) -> Box<dyn SyllableEditor>;
 }
