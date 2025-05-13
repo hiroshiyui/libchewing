@@ -64,7 +64,7 @@ if(NOT Corrosion_FOUND)
     FetchContent_Declare(
         Corrosion
         GIT_REPOSITORY https://github.com/corrosion-rs/corrosion.git
-        GIT_TAG 64289b1d79d6d19cd2e241db515381a086bb8407 # v0.5
+        GIT_TAG b1fab721655c5c4b1b08a083d3cd29f163af75d0 # v0.5.1
         FIND_PACKAGE_ARGS
     )
     FetchContent_MakeAvailable(Corrosion)
@@ -109,15 +109,8 @@ if(WITH_SQLITE3)
     endif()
 endif()
 
-include(CheckFunctionExists)
-check_function_exists(asprintf HAVE_ASPRINTF)
-
-include(CheckIncludeFiles)
-check_include_files(unistd.h HAVE_UNISTD_H)
-check_include_files(stdint.h HAVE_STDINT_H)
-
 set(SRC_DIR ${PROJECT_SOURCE_DIR}/src)
-set(INC_DIR ${PROJECT_SOURCE_DIR}/include)
+set(INC_DIR ${PROJECT_SOURCE_DIR}/capi/include)
 set(TOOLS_SRC_DIR ${PROJECT_SOURCE_DIR}/src/tools)
 set(TOOLS_BIN_DIR ${PROJECT_BINARY_DIR}/src/tools)
 set(DATA_SRC_DIR ${PROJECT_SOURCE_DIR}/data)
@@ -152,8 +145,7 @@ configure_file(
 
 include_directories(
     ${PROJECT_BINARY_DIR}/include
-    ${PROJECT_SOURCE_DIR}/include
-    ${PROJECT_SOURCE_DIR}/src/porting_layer/include
+    ${PROJECT_SOURCE_DIR}/capi/include
 )
 
 set(ALL_INC
@@ -212,6 +204,7 @@ if(BUILD_SHARED_LIBS)
             PRIVATE /DEF:${PROJECT_SOURCE_DIR}/capi/src/symbols-msvc.def
             PRIVATE /NODEFAULTLIB:MSVCRT
             PRIVATE /NODEFAULTLIB:MSVCRTD
+            PRIVATE /NODEFAULTLIB:LIBCMTD
         )
         set_target_properties(libchewing PROPERTIES
             LINK_DEPENDS ${PROJECT_SOURCE_DIR}/capi/src/symbols-msvc.def

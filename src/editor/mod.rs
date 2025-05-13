@@ -20,8 +20,8 @@ use log::{debug, info, trace, warn};
 
 use crate::{
     conversion::{
-        full_width_symbol_input, special_symbol_input, ChewingEngine, ConversionEngine, Interval,
-        Symbol,
+        ChewingEngine, ConversionEngine, Interval, Symbol, full_width_symbol_input,
+        special_symbol_input,
     },
     dictionary::{
         Dictionary, DictionaryMut, Layered, LookupStrategy, SystemDictionaryLoader,
@@ -191,13 +191,16 @@ pub(crate) struct SharedState {
 
 impl Editor {
     pub fn chewing() -> Result<Editor, Box<dyn Error>> {
-        let system_dict = SystemDictionaryLoader::new().load()?;
+        let sys_loader = SystemDictionaryLoader::new();
+        let base_dict = sys_loader.load()?;
+        let drop_in_dict = sys_loader.load_drop_in()?;
+        let system_dict = Vec::from_iter(base_dict.into_iter().chain(drop_in_dict));
         let user_dict = UserDictionaryLoader::new().load()?;
         let estimate = LaxUserFreqEstimate::max_from(user_dict.as_ref());
         let dict = Layered::new(system_dict, user_dict);
         let conversion_engine = Box::new(ChewingEngine::new());
-        let abbrev = SystemDictionaryLoader::new().load_abbrev()?;
-        let sym_sel = SystemDictionaryLoader::new().load_symbol_selector()?;
+        let abbrev = sys_loader.load_abbrev()?;
+        let sym_sel = sys_loader.load_symbol_selector()?;
         let editor = Editor::new(conversion_engine, dict, estimate, abbrev, sym_sel);
         Ok(editor)
     }
@@ -517,7 +520,7 @@ impl SharedState {
             self.conv
                 .convert(&self.dict, self.com.as_ref())
                 .next()
-                .unwrap()
+                .unwrap_or_default()
         }
     }
     fn intervals(&self) -> impl Iterator<Item = Interval> {
@@ -1541,15 +1544,15 @@ mod tests {
         conversion::ChewingEngine,
         dictionary::{Layered, TrieBuf},
         editor::{
-            abbrev::AbbrevTable, estimate, keyboard::Modifiers, EditorKeyBehavior, SymbolSelector,
+            EditorKeyBehavior, SymbolSelector, abbrev::AbbrevTable, estimate, keyboard::Modifiers,
         },
         syl,
         zhuyin::Bopomofo,
     };
 
     use super::{
-        keyboard::{KeyCode, KeyboardLayout, Qwerty},
         BasicEditor, Editor,
+        keyboard::{KeyCode, KeyboardLayout, Qwerty},
     };
 
     #[test]

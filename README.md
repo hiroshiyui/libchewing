@@ -62,7 +62,7 @@ preference settings.
 + The inactive one: [SCIM](https://github.com/chewing/scim-chewing), standalone Microsoft Windows 32/64-bit ([windows-chewing](https://github.com/chewing/windows-chewing)), mozc, [uim](https://github.com/uim/uim-chewing), [ucimf](https://github.com/matlinuxer2/ucimf), JMCCE, xcin, IIIMF, standalone MacOS X (SpaceChewing), Sun's Java Desktop System Input Method Framework, OpenVanilla Input Method Framework (previous than version 1.0), and OXIM.
 
 
-### 2. support phonetic keyboard layout
+### 2. Support phonetic keyboard layout
 
   - DaChen (default)
   - Hsu
@@ -75,8 +75,10 @@ preference settings.
   - HanYu PinYin
   - Taiwan Huayu Luomapinyin
   - MPS2 Pinyin
+  - Colemak
   - Colemak-DH ANSI
   - Colemak-DH Ortholinear
+  - Workman
 
 
 ### 3. External and unmerged projects
@@ -105,7 +107,7 @@ be built.
    - cmake >= 3.21.0
 + Toolchain / IDE:
    - clang >= 3.2 OR gcc >= 4.6.3
-   - Rust >= 1.77
+   - Rust >= 1.85
    - Build Tools for Visual Studio 2022 for MSVC build
    - Vcpkg for MSVC build
 + Documentation tools:
@@ -191,7 +193,7 @@ To ensure libchewing can be built on various Linux distributions, we use the
 minimum rust version available from major distributions' next release branch.
 Data source: https://repology.org/project/rust/versions
 
-* Current MSRV: 1.77.0 (Debian unstable)
+* Current MSRV: 1.85.0 (Debian unstable)
 
 
 ## Usage

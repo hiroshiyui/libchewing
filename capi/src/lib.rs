@@ -318,6 +318,7 @@ pub mod layout {
     /// * KB_THL_PINYIN
     /// * KB_MPS2_PINYIN
     /// * KB_CARPALX
+    /// * KB_COLEMAK
     /// * KB_COLEMAK_DH_ANSI
     /// * KB_COLEMAK_DH_ORTH
     /// * KB_WORKMAN
@@ -704,6 +705,17 @@ pub mod output {
     /// different from other newer functions that returns boolean value.
     /// </p>
     pub use super::io::chewing_zuin_Check;
+
+    /// Returns the phonetic characters in the pre-edit buffer.
+    ///
+    /// The returned value is a pointer to a character string. The memory must
+    /// be freed by the caller using function
+    /// [chewing_free][super::setup::chewing_free].
+    ///
+    /// # Failures
+    ///
+    /// This function returns NULL when memory allocation fails.
+    pub use super::io::chewing_bopomofo_String;
 
     /// Returns the phonetic characters in the pre-edit buffer.
     ///

@@ -13,9 +13,9 @@ use std::{
 };
 
 use der::{
-    asn1::{ContextSpecificRef, OctetStringRef, Utf8StringRef},
     DecodeValue, Document, Encode, EncodeValue, ErrorKind, FixedTag, Length, Reader, Sequence,
     SliceReader, Tag, TagMode, TagNumber, Tagged, Writer,
+    asn1::{ContextSpecificRef, OctetStringRef, Utf8StringRef},
 };
 use log::{error, warn};
 
@@ -174,17 +174,9 @@ impl Trie {
 
 /// Options and flags which can be used to configure how a trie dictionary is
 /// opened.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct TrieOpenOptions {
     fuzzy_search: bool,
-}
-
-impl Default for TrieOpenOptions {
-    fn default() -> Self {
-        Self {
-            fuzzy_search: false,
-        }
-    }
 }
 
 impl TrieOpenOptions {
@@ -1206,8 +1198,8 @@ mod tests {
 
     use crate::{
         dictionary::{
-            trie::TrieBuilderNode, Dictionary, DictionaryBuilder, DictionaryInfo, LookupStrategy,
-            Phrase, TrieOpenOptions,
+            Dictionary, DictionaryBuilder, DictionaryInfo, LookupStrategy, Phrase, TrieOpenOptions,
+            trie::TrieBuilderNode,
         },
         syl,
         zhuyin::Bopomofo,

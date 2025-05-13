@@ -1,8 +1,8 @@
 use std::{
-    ffi::{c_char, c_int, c_void, CString},
+    ffi::{CString, c_char, c_int, c_void},
     sync::{
-        atomic::{AtomicPtr, Ordering::Relaxed},
         Mutex,
+        atomic::{AtomicPtr, Ordering::Relaxed},
     },
 };
 
@@ -69,7 +69,7 @@ impl Log for ChewingLogger {
                     logger(
                         logger_data.load(Relaxed),
                         as_chewing_level(record.level()),
-                        b"%s\n\0".as_ptr().cast(),
+                        c"%s\n".as_ptr().cast(),
                         fmt_cstring.as_ptr(),
                     )
                 }

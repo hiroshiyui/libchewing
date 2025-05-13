@@ -1,11 +1,11 @@
 use std::{
     cmp::min,
     collections::BTreeMap,
-    ffi::{c_char, c_int, c_uint, c_ushort, c_void, CStr, CString},
+    ffi::{CStr, CString, c_char, c_int, c_uint, c_ushort, c_void},
     mem,
     ptr::{null, null_mut},
     slice, str,
-    sync::OnceLock,
+    sync::RwLock,
 };
 
 use chewing::{
@@ -14,22 +14,22 @@ use chewing::{
         Dictionary, Layered, LookupStrategy, SystemDictionaryLoader, Trie, UserDictionaryLoader,
     },
     editor::{
+        AbbrevTable, BasicEditor, CharacterForm, ConversionEngineKind, Editor, EditorKeyBehavior,
+        LanguageMode, LaxUserFreqEstimate, SymbolSelector, UserPhraseAddDirection,
         keyboard::{AnyKeyboardLayout, KeyCode, KeyboardLayout, Modifiers, Qwerty},
         zhuyin_layout::{
             DaiChien26, Et, Et26, GinYieh, Hsu, Ibm, KeyboardLayoutCompat, Pinyin, Standard,
             SyllableEditor,
         },
-        AbbrevTable, BasicEditor, CharacterForm, ConversionEngineKind, Editor, EditorKeyBehavior,
-        LanguageMode, LaxUserFreqEstimate, SymbolSelector, UserPhraseAddDirection,
     },
     zhuyin::Syllable,
 };
 use log::{debug, error, info};
 
 use crate::public::{
-    ChewingConfigData, ChewingContext, IntervalType, SelKeys, CHEWING_CONVERSION_ENGINE,
-    CHINESE_MODE, FULLSHAPE_MODE, FUZZY_CHEWING_CONVERSION_ENGINE, HALFSHAPE_MODE, MAX_SELKEY,
-    SIMPLE_CONVERSION_ENGINE, SYMBOL_MODE,
+    CHEWING_CONVERSION_ENGINE, CHINESE_MODE, ChewingConfigData, ChewingContext, FULLSHAPE_MODE,
+    FUZZY_CHEWING_CONVERSION_ENGINE, HALFSHAPE_MODE, IntervalType, MAX_SELKEY,
+    SIMPLE_CONVERSION_ENGINE, SYMBOL_MODE, SelKeys,
 };
 
 use super::logger::ChewingLogger;
@@ -46,25 +46,19 @@ enum Owned {
     CUShortSlice(usize),
 }
 
-static mut OWNED: OnceLock<BTreeMap<*mut c_void, Owned>> = OnceLock::new();
+static OWNED: RwLock<BTreeMap<usize, Owned>> = RwLock::new(BTreeMap::new());
 
 fn owned_into_raw<T>(owned: Owned, ptr: *mut T) -> *mut T {
-    unsafe {
-        if OWNED.get().is_none() {
-            let _ = OWNED.set(BTreeMap::new());
-        }
-    }
-    let void_ptr: *mut c_void = ptr.cast();
-    match unsafe { OWNED.get_mut() } {
-        Some(map) => {
-            map.insert(void_ptr, owned);
+    match OWNED.write() {
+        Ok(mut map) => {
+            map.insert(ptr as usize, owned);
             ptr
         }
-        None => null_mut(),
+        Err(_) => null_mut(),
     }
 }
 
-static mut EMPTY_STRING_BUFFER: [u8; 1] = [0; 1];
+static EMPTY_STRING_BUFFER: [u8; 1] = [0; 1];
 
 fn copy_cstr(buf: &mut [u8], buffer: &str) -> *const c_char {
     let n = min(buf.len(), buffer.len());
@@ -73,8 +67,8 @@ fn copy_cstr(buf: &mut [u8], buffer: &str) -> *const c_char {
     buf.as_ptr().cast()
 }
 
-fn global_empty_cstr() -> *mut c_char {
-    unsafe { EMPTY_STRING_BUFFER.as_mut_ptr().cast() }
+fn global_empty_cstr() -> *const c_char {
+    EMPTY_STRING_BUFFER.as_ptr().cast()
 }
 
 unsafe fn slice_from_ptr_with_nul<'a>(ptr: *const c_char) -> Option<&'a [c_char]> {
@@ -95,7 +89,7 @@ unsafe fn str_from_ptr_with_nul<'a>(ptr: *const c_char) -> Option<&'a str> {
         .and_then(|data| str::from_utf8(unsafe { mem::transmute::<&[c_char], &[u8]>(data) }).ok())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn chewing_new() -> *mut ChewingContext {
     unsafe { chewing_new2(null(), null(), None, null_mut()) }
 }
@@ -103,42 +97,37 @@ pub extern "C" fn chewing_new() -> *mut ChewingContext {
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_new2(
     syspath: *const c_char,
     userpath: *const c_char,
     logger: Option<unsafe extern "C" fn(data: *mut c_void, level: c_int, fmt: *const c_char, ...)>,
     loggerdata: *mut c_void,
 ) -> *mut ChewingContext {
-    unsafe {
-        if OWNED.get().is_none() {
-            let _ = OWNED.set(BTreeMap::new());
-        }
-    }
     LOGGER.init();
     let _ = log::set_logger(&LOGGER);
     log::set_max_level(log::LevelFilter::Trace);
     if let Some(logger) = logger {
         LOGGER.set(Some((logger, loggerdata)));
     }
-    let sys_loader = if syspath.is_null() {
-        SystemDictionaryLoader::new()
-    } else {
-        let search_path = unsafe { CStr::from_ptr(syspath) }
-            .to_str()
-            .expect("invalid syspath string");
-        SystemDictionaryLoader::new().sys_path(search_path)
-    };
-    let dictionaries = sys_loader.load();
-    let dictionaries = match dictionaries {
+    let mut sys_loader = SystemDictionaryLoader::new();
+    if !syspath.is_null() {
+        if let Ok(search_path) = unsafe { CStr::from_ptr(syspath).to_str() } {
+            sys_loader = sys_loader.sys_path(search_path);
+        }
+    }
+    let dictionaries = match sys_loader.load() {
         Ok(d) => d,
         Err(e) => {
             let builtin = Trie::new(&include_bytes!("../data/mini.dat")[..]);
             error!("Failed to load system dict: {e}");
             error!("Loading builtin minimum dictionary...");
+            // NB: we can unwrap because the built-in dictionary should always
+            // be valid.
             vec![Box::new(builtin.unwrap()) as Box<dyn Dictionary>]
         }
     };
+    let drop_in_dicts = sys_loader.load_drop_in().unwrap_or_default();
     let abbrev = sys_loader.load_abbrev();
     let abbrev = match abbrev {
         Ok(abbr) => abbr,
@@ -154,30 +143,28 @@ pub unsafe extern "C" fn chewing_new2(
         Err(e) => {
             error!("Failed to load symbol table: {e}");
             error!("Loading empty table...");
+            // NB: we can unwrap here because empty table is always valid.
             SymbolSelector::new(b"".as_slice()).unwrap()
         }
     };
-    let user_dictionary = if userpath.is_null() {
-        UserDictionaryLoader::new().load()
-    } else {
-        let data_path = unsafe { CStr::from_ptr(userpath) }
-            .to_str()
-            .expect("invalid syspath string");
-        UserDictionaryLoader::new()
-            .userphrase_path(data_path)
-            .load()
-    };
-    let user_dictionary = match user_dictionary {
+    let mut user_dictionary = UserDictionaryLoader::new();
+    if !userpath.is_null() {
+        if let Ok(data_path) = unsafe { CStr::from_ptr(userpath).to_str() } {
+            user_dictionary = user_dictionary.userphrase_path(data_path);
+        }
+    }
+    let user_dictionary = match user_dictionary.load() {
         Ok(d) => d,
         Err(e) => {
             error!("Failed to load user dict: {e}");
-            return null_mut();
+            UserDictionaryLoader::in_memory()
         }
     };
 
     let estimate = LaxUserFreqEstimate::max_from(user_dictionary.as_ref());
 
-    let dict = Layered::new(dictionaries, user_dictionary);
+    let system_dicts = Vec::from_iter(dictionaries.into_iter().chain(drop_in_dicts));
+    let dict = Layered::new(system_dicts, user_dictionary);
     let conversion_engine = Box::new(ChewingEngine::new());
     let kb_compat = KeyboardLayoutCompat::Default;
     let keyboard = AnyKeyboardLayout::Qwerty(Qwerty);
@@ -217,14 +204,9 @@ pub unsafe extern "C" fn chewing_new2(
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_delete(ctx: *mut ChewingContext) {
     if !ctx.is_null() {
-        unsafe {
-            if OWNED.get().is_none() {
-                let _ = OWNED.take();
-            }
-        }
         LOGGER.set(None);
         info!("Destroying context {ctx:?}");
         drop(unsafe { Box::from_raw(ctx) })
@@ -234,11 +216,11 @@ pub unsafe extern "C" fn chewing_delete(ctx: *mut ChewingContext) {
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_free(ptr: *mut c_void) {
     if !ptr.is_null() {
-        if let Some(map) = unsafe { OWNED.get() } {
-            if let Some(owned) = map.get(&ptr) {
+        if let Ok(map) = OWNED.write() {
+            if let Some(owned) = map.get(&(ptr as usize)) {
                 match owned {
                     Owned::CString => drop(unsafe { CString::from_raw(ptr.cast()) }),
                     Owned::CUShortSlice(len) => {
@@ -277,7 +259,7 @@ macro_rules! as_ref_or_return {
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_Reset(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
     ctx.editor.clear();
@@ -287,7 +269,7 @@ pub unsafe extern "C" fn chewing_Reset(ctx: *mut ChewingContext) -> c_int {
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_ack(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
     ctx.editor.ack();
@@ -297,7 +279,7 @@ pub unsafe extern "C" fn chewing_ack(ctx: *mut ChewingContext) -> c_int {
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_config_has_option(
     ctx: *const ChewingContext,
     name: *const c_char,
@@ -306,24 +288,24 @@ pub unsafe extern "C" fn chewing_config_has_option(
     let cstr = unsafe { CStr::from_ptr(name) };
     let name = cstr.to_string_lossy();
 
-    let ret = match name.as_ref() {
+    let ret = matches!(
+        name.as_ref(),
         "chewing.user_phrase_add_direction"
-        | "chewing.disable_auto_learn_phrase"
-        | "chewing.auto_shift_cursor"
-        | "chewing.candidates_per_page"
-        | "chewing.language_mode"
-        | "chewing.easy_symbol_input"
-        | "chewing.esc_clear_all_buffer"
-        | "chewing.keyboard_type"
-        | "chewing.auto_commit_threshold"
-        | "chewing.phrase_choice_rearward"
-        | "chewing.selection_keys"
-        | "chewing.character_form"
-        | "chewing.space_is_select_key"
-        | "chewing.conversion_engine"
-        | "chewing.enable_fullwidth_toggle_key" => true,
-        _ => false,
-    };
+            | "chewing.disable_auto_learn_phrase"
+            | "chewing.auto_shift_cursor"
+            | "chewing.candidates_per_page"
+            | "chewing.language_mode"
+            | "chewing.easy_symbol_input"
+            | "chewing.esc_clear_all_buffer"
+            | "chewing.keyboard_type"
+            | "chewing.auto_commit_threshold"
+            | "chewing.phrase_choice_rearward"
+            | "chewing.selection_keys"
+            | "chewing.character_form"
+            | "chewing.space_is_select_key"
+            | "chewing.conversion_engine"
+            | "chewing.enable_fullwidth_toggle_key"
+    );
 
     ret as c_int
 }
@@ -331,7 +313,7 @@ pub unsafe extern "C" fn chewing_config_has_option(
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_config_get_int(
     ctx: *const ChewingContext,
     name: *const c_char,
@@ -376,7 +358,7 @@ pub unsafe extern "C" fn chewing_config_get_int(
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_config_set_int(
     ctx: *mut ChewingContext,
     name: *const c_char,
@@ -437,7 +419,7 @@ pub unsafe extern "C" fn chewing_config_set_int(
             options.esc_clear_all_buffer = value > 0;
         }
         "chewing.auto_commit_threshold" => {
-            if value < 0 || value > 39 {
+            if !(0..=39).contains(&value) {
                 return ERROR;
             }
             options.auto_commit_threshold = value as usize;
@@ -495,7 +477,7 @@ pub unsafe extern "C" fn chewing_config_set_int(
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_config_get_str(
     ctx: *const ChewingContext,
     name: *const c_char,
@@ -536,7 +518,7 @@ pub unsafe extern "C" fn chewing_config_get_str(
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_config_set_str(
     ctx: *mut ChewingContext,
     name: *const c_char,
@@ -572,6 +554,7 @@ pub unsafe extern "C" fn chewing_config_set_str(
                 KB::ThlPinyin => (AnyKeyboardLayout::qwerty(), Box::new(Pinyin::thl())),
                 KB::Mps2Pinyin => (AnyKeyboardLayout::qwerty(), Box::new(Pinyin::mps2())),
                 KB::Carpalx => (AnyKeyboardLayout::qwerty(), Box::new(Standard::new())),
+                KB::Colemak => (AnyKeyboardLayout::colemak(), Box::new(Standard::new())),
                 KB::ColemakDhAnsi => (
                     AnyKeyboardLayout::colemak_dh_ansi(),
                     Box::new(Standard::new()),
@@ -605,7 +588,7 @@ pub unsafe extern "C" fn chewing_config_set_str(
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_set_KBType(ctx: *mut ChewingContext, kbtype: c_int) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
     use KeyboardLayoutCompat as KB;
@@ -627,6 +610,7 @@ pub unsafe extern "C" fn chewing_set_KBType(ctx: *mut ChewingContext, kbtype: c_
         KB::ThlPinyin => (AnyKeyboardLayout::qwerty(), Box::new(Pinyin::thl())),
         KB::Mps2Pinyin => (AnyKeyboardLayout::qwerty(), Box::new(Pinyin::mps2())),
         KB::Carpalx => (AnyKeyboardLayout::qwerty(), Box::new(Standard::new())),
+        KB::Colemak => (AnyKeyboardLayout::colemak(), Box::new(Standard::new())),
         KB::ColemakDhAnsi => (
             AnyKeyboardLayout::colemak_dh_ansi(),
             Box::new(Standard::new()),
@@ -650,7 +634,7 @@ pub unsafe extern "C" fn chewing_set_KBType(ctx: *mut ChewingContext, kbtype: c_
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_get_KBType(ctx: *const ChewingContext) -> c_int {
     let ctx = as_ref_or_return!(ctx, ERROR);
     ctx.kb_compat as c_int
@@ -659,7 +643,7 @@ pub unsafe extern "C" fn chewing_get_KBType(ctx: *const ChewingContext) -> c_int
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_get_KBString(ctx: *const ChewingContext) -> *mut c_char {
     let ctx = as_ref_or_return!(
         ctx,
@@ -678,7 +662,7 @@ pub unsafe extern "C" fn chewing_get_KBString(ctx: *const ChewingContext) -> *mu
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_KBStr2Num(str: *const c_char) -> c_int {
     let cstr = unsafe { CStr::from_ptr(str) };
     let utf8str = cstr.to_string_lossy();
@@ -689,71 +673,71 @@ pub unsafe extern "C" fn chewing_KBStr2Num(str: *const c_char) -> c_int {
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_set_ChiEngMode(ctx: *mut ChewingContext, mode: c_int) {
-    unsafe { chewing_config_set_int(ctx, b"chewing.language_mode\0".as_ptr().cast(), mode) };
+    unsafe { chewing_config_set_int(ctx, c"chewing.language_mode".as_ptr().cast(), mode) };
 }
 
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_get_ChiEngMode(ctx: *const ChewingContext) -> c_int {
-    unsafe { chewing_config_get_int(ctx, b"chewing.language_mode\0".as_ptr().cast()) }
+    unsafe { chewing_config_get_int(ctx, c"chewing.language_mode".as_ptr().cast()) }
 }
 
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_set_ShapeMode(ctx: *mut ChewingContext, mode: c_int) {
-    unsafe { chewing_config_set_int(ctx, b"chewing.character_form\0".as_ptr().cast(), mode) };
+    unsafe { chewing_config_set_int(ctx, c"chewing.character_form".as_ptr().cast(), mode) };
 }
 
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_get_ShapeMode(ctx: *const ChewingContext) -> c_int {
-    unsafe { chewing_config_get_int(ctx, b"chewing.character_form\0".as_ptr().cast()) }
+    unsafe { chewing_config_get_int(ctx, c"chewing.character_form".as_ptr().cast()) }
 }
 
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_set_candPerPage(ctx: *mut ChewingContext, n: c_int) {
-    unsafe { chewing_config_set_int(ctx, b"chewing.candidates_per_page\0".as_ptr().cast(), n) };
+    unsafe { chewing_config_set_int(ctx, c"chewing.candidates_per_page".as_ptr().cast(), n) };
 }
 
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_get_candPerPage(ctx: *const ChewingContext) -> c_int {
-    unsafe { chewing_config_get_int(ctx, b"chewing.candidates_per_page\0".as_ptr().cast()) }
+    unsafe { chewing_config_get_int(ctx, c"chewing.candidates_per_page".as_ptr().cast()) }
 }
 
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_set_maxChiSymbolLen(ctx: *mut ChewingContext, n: c_int) {
-    unsafe { chewing_config_set_int(ctx, b"chewing.auto_commit_threshold\0".as_ptr().cast(), n) };
+    unsafe { chewing_config_set_int(ctx, c"chewing.auto_commit_threshold".as_ptr().cast(), n) };
 }
 
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_get_maxChiSymbolLen(ctx: *const ChewingContext) -> c_int {
-    unsafe { chewing_config_get_int(ctx, b"chewing.auto_commit_threshold\0".as_ptr().cast()) }
+    unsafe { chewing_config_get_int(ctx, c"chewing.auto_commit_threshold".as_ptr().cast()) }
 }
 
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_set_selKey(
     ctx: *mut ChewingContext,
     sel_keys: *const c_int,
@@ -772,7 +756,7 @@ pub unsafe extern "C" fn chewing_set_selKey(
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_get_selKey(ctx: *const ChewingContext) -> *mut c_int {
     let ctx = as_ref_or_return!(ctx, null_mut());
 
@@ -782,7 +766,7 @@ pub unsafe extern "C" fn chewing_get_selKey(ctx: *const ChewingContext) -> *mut 
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_set_addPhraseDirection(
     ctx: *mut ChewingContext,
     direction: c_int,
@@ -790,7 +774,7 @@ pub unsafe extern "C" fn chewing_set_addPhraseDirection(
     unsafe {
         chewing_config_set_int(
             ctx,
-            b"chewing.user_phrase_add_direction\0".as_ptr().cast(),
+            c"chewing.user_phrase_add_direction".as_ptr().cast(),
             direction,
         )
     };
@@ -799,106 +783,100 @@ pub unsafe extern "C" fn chewing_set_addPhraseDirection(
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_get_addPhraseDirection(ctx: *const ChewingContext) -> c_int {
-    unsafe { chewing_config_get_int(ctx, b"chewing.user_phrase_add_direction\0".as_ptr().cast()) }
+    unsafe { chewing_config_get_int(ctx, c"chewing.user_phrase_add_direction".as_ptr().cast()) }
 }
 
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_set_spaceAsSelection(ctx: *mut ChewingContext, mode: c_int) {
-    unsafe { chewing_config_set_int(ctx, b"chewing.space_is_select_key\0".as_ptr().cast(), mode) };
+    unsafe { chewing_config_set_int(ctx, c"chewing.space_is_select_key".as_ptr().cast(), mode) };
 }
 
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_get_spaceAsSelection(ctx: *const ChewingContext) -> c_int {
-    unsafe { chewing_config_get_int(ctx, b"chewing.space_is_select_key\0".as_ptr().cast()) }
+    unsafe { chewing_config_get_int(ctx, c"chewing.space_is_select_key".as_ptr().cast()) }
 }
 
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_set_escCleanAllBuf(ctx: *mut ChewingContext, mode: c_int) {
-    unsafe { chewing_config_set_int(ctx, b"chewing.esc_clear_all_buffer\0".as_ptr().cast(), mode) };
+    unsafe { chewing_config_set_int(ctx, c"chewing.esc_clear_all_buffer".as_ptr().cast(), mode) };
 }
 
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_get_escCleanAllBuf(ctx: *const ChewingContext) -> c_int {
-    unsafe { chewing_config_get_int(ctx, b"chewing.esc_clear_all_buffer\0".as_ptr().cast()) }
+    unsafe { chewing_config_get_int(ctx, c"chewing.esc_clear_all_buffer".as_ptr().cast()) }
 }
 
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_set_autoShiftCur(ctx: *mut ChewingContext, mode: c_int) {
-    unsafe { chewing_config_set_int(ctx, b"chewing.auto_shift_cursor\0".as_ptr().cast(), mode) };
+    unsafe { chewing_config_set_int(ctx, c"chewing.auto_shift_cursor".as_ptr().cast(), mode) };
 }
 
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_get_autoShiftCur(ctx: *const ChewingContext) -> c_int {
-    unsafe { chewing_config_get_int(ctx, b"chewing.auto_shift_cursor\0".as_ptr().cast()) }
+    unsafe { chewing_config_get_int(ctx, c"chewing.auto_shift_cursor".as_ptr().cast()) }
 }
 
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_set_easySymbolInput(ctx: *mut ChewingContext, mode: c_int) {
-    unsafe { chewing_config_set_int(ctx, b"chewing.easy_symbol_input\0".as_ptr().cast(), mode) };
+    unsafe { chewing_config_set_int(ctx, c"chewing.easy_symbol_input".as_ptr().cast(), mode) };
 }
 
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_get_easySymbolInput(ctx: *const ChewingContext) -> c_int {
-    unsafe { chewing_config_get_int(ctx, b"chewing.easy_symbol_input\0".as_ptr().cast()) }
+    unsafe { chewing_config_get_int(ctx, c"chewing.easy_symbol_input".as_ptr().cast()) }
 }
 
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_set_phraseChoiceRearward(ctx: *mut ChewingContext, mode: c_int) {
-    unsafe {
-        chewing_config_set_int(
-            ctx,
-            b"chewing.phrase_choice_rearward\0".as_ptr().cast(),
-            mode,
-        )
-    };
+    unsafe { chewing_config_set_int(ctx, c"chewing.phrase_choice_rearward".as_ptr().cast(), mode) };
 }
 
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_get_phraseChoiceRearward(ctx: *const ChewingContext) -> c_int {
-    unsafe { chewing_config_get_int(ctx, b"chewing.phrase_choice_rearward\0".as_ptr().cast()) }
+    unsafe { chewing_config_get_int(ctx, c"chewing.phrase_choice_rearward".as_ptr().cast()) }
 }
 
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_set_autoLearn(ctx: *mut ChewingContext, mode: c_int) {
     unsafe {
         chewing_config_set_int(
             ctx,
-            b"chewing.disable_auto_learn_phrase\0".as_ptr().cast(),
+            c"chewing.disable_auto_learn_phrase".as_ptr().cast(),
             mode,
         )
     };
@@ -907,15 +885,15 @@ pub unsafe extern "C" fn chewing_set_autoLearn(ctx: *mut ChewingContext, mode: c
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_get_autoLearn(ctx: *const ChewingContext) -> c_int {
-    unsafe { chewing_config_get_int(ctx, b"chewing.disable_auto_learn_phrase\0".as_ptr().cast()) }
+    unsafe { chewing_config_get_int(ctx, c"chewing.disable_auto_learn_phrase".as_ptr().cast()) }
 }
 
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_get_phoneSeq(ctx: *const ChewingContext) -> *mut c_ushort {
     let ctx = as_ref_or_return!(ctx, null_mut());
 
@@ -925,6 +903,7 @@ pub unsafe extern "C" fn chewing_get_phoneSeq(ctx: *const ChewingContext) -> *mu
         .iter()
         .cloned()
         .filter(Symbol::is_syllable)
+        // NB: we just checked symbol is valid syllable
         .map(|sym| sym.to_syllable().unwrap().to_u16())
         .collect();
     let len = syllables.len();
@@ -935,7 +914,7 @@ pub unsafe extern "C" fn chewing_get_phoneSeq(ctx: *const ChewingContext) -> *mu
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_get_phoneSeqLen(ctx: *const ChewingContext) -> c_int {
     let ctx = as_ref_or_return!(ctx, ERROR);
 
@@ -950,7 +929,7 @@ pub unsafe extern "C" fn chewing_get_phoneSeqLen(ctx: *const ChewingContext) -> 
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_set_logger(
     ctx: *mut ChewingContext,
     logger: Option<extern "C" fn(data: *mut c_void, level: c_int, fmt: *const c_char, ...)>,
@@ -969,7 +948,7 @@ pub unsafe extern "C" fn chewing_set_logger(
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_userphrase_enumerate(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
@@ -980,7 +959,7 @@ pub unsafe extern "C" fn chewing_userphrase_enumerate(ctx: *mut ChewingContext) 
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_userphrase_has_next(
     ctx: *mut ChewingContext,
     phrase_len: *mut c_uint,
@@ -992,6 +971,7 @@ pub unsafe extern "C" fn chewing_userphrase_has_next(
         return 0;
     }
 
+    // NB: we just checked the iter is Some
     match ctx.userphrase_iter.as_mut().unwrap().peek() {
         Some(entry) => {
             if !phrase_len.is_null() {
@@ -1019,7 +999,7 @@ pub unsafe extern "C" fn chewing_userphrase_has_next(
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_userphrase_get(
     ctx: *mut ChewingContext,
     phrase_buf: *mut c_char,
@@ -1033,6 +1013,7 @@ pub unsafe extern "C" fn chewing_userphrase_get(
         return -1;
     }
 
+    // NB: we just checked the iter is Some
     match ctx.userphrase_iter.as_mut().unwrap().next() {
         Some(entry) => {
             if !phrase_buf.is_null() {
@@ -1065,7 +1046,7 @@ pub unsafe extern "C" fn chewing_userphrase_get(
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_userphrase_add(
     ctx: *mut ChewingContext,
     phrase_buf: *const c_char,
@@ -1096,7 +1077,7 @@ pub unsafe extern "C" fn chewing_userphrase_add(
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_userphrase_remove(
     ctx: *mut ChewingContext,
     phrase_buf: *const c_char,
@@ -1132,7 +1113,7 @@ pub unsafe extern "C" fn chewing_userphrase_remove(
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_userphrase_lookup(
     ctx: *mut ChewingContext,
     phrase_buf: *const c_char,
@@ -1165,7 +1146,7 @@ pub unsafe extern "C" fn chewing_userphrase_lookup(
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_cand_list_first(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
@@ -1180,7 +1161,7 @@ pub unsafe extern "C" fn chewing_cand_list_first(ctx: *mut ChewingContext) -> c_
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_cand_list_last(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
@@ -1195,7 +1176,7 @@ pub unsafe extern "C" fn chewing_cand_list_last(ctx: *mut ChewingContext) -> c_i
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_cand_list_has_next(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_ref_or_return!(ctx, FALSE);
 
@@ -1209,7 +1190,7 @@ pub unsafe extern "C" fn chewing_cand_list_has_next(ctx: *mut ChewingContext) ->
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_cand_list_has_prev(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_ref_or_return!(ctx, FALSE);
 
@@ -1223,7 +1204,7 @@ pub unsafe extern "C" fn chewing_cand_list_has_prev(ctx: *mut ChewingContext) ->
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_cand_list_next(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
     if !ctx.editor.is_selecting() {
@@ -1238,7 +1219,7 @@ pub unsafe extern "C" fn chewing_cand_list_next(ctx: *mut ChewingContext) -> c_i
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_cand_list_prev(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
     if !ctx.editor.is_selecting() {
@@ -1253,7 +1234,7 @@ pub unsafe extern "C" fn chewing_cand_list_prev(ctx: *mut ChewingContext) -> c_i
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_commit_preedit_buf(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
@@ -1266,7 +1247,7 @@ pub unsafe extern "C" fn chewing_commit_preedit_buf(ctx: *mut ChewingContext) ->
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_clean_preedit_buf(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
@@ -1281,7 +1262,7 @@ pub unsafe extern "C" fn chewing_clean_preedit_buf(ctx: *mut ChewingContext) -> 
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_clean_bopomofo_buf(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
@@ -1292,7 +1273,7 @@ pub unsafe extern "C" fn chewing_clean_bopomofo_buf(ctx: *mut ChewingContext) ->
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_phone_to_bopomofo(
     phone: c_ushort,
     buf: *mut c_char,
@@ -1313,7 +1294,7 @@ pub unsafe extern "C" fn chewing_phone_to_bopomofo(
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_Space(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
@@ -1325,7 +1306,7 @@ pub unsafe extern "C" fn chewing_handle_Space(ctx: *mut ChewingContext) -> c_int
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_Esc(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
@@ -1336,7 +1317,7 @@ pub unsafe extern "C" fn chewing_handle_Esc(ctx: *mut ChewingContext) -> c_int {
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_Enter(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
@@ -1348,7 +1329,7 @@ pub unsafe extern "C" fn chewing_handle_Enter(ctx: *mut ChewingContext) -> c_int
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_Del(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
@@ -1359,7 +1340,7 @@ pub unsafe extern "C" fn chewing_handle_Del(ctx: *mut ChewingContext) -> c_int {
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_Backspace(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
@@ -1371,7 +1352,7 @@ pub unsafe extern "C" fn chewing_handle_Backspace(ctx: *mut ChewingContext) -> c
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_Tab(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
@@ -1382,7 +1363,7 @@ pub unsafe extern "C" fn chewing_handle_Tab(ctx: *mut ChewingContext) -> c_int {
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_ShiftLeft(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
@@ -1394,7 +1375,7 @@ pub unsafe extern "C" fn chewing_handle_ShiftLeft(ctx: *mut ChewingContext) -> c
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_Left(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
@@ -1406,7 +1387,7 @@ pub unsafe extern "C" fn chewing_handle_Left(ctx: *mut ChewingContext) -> c_int 
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_ShiftRight(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
@@ -1420,7 +1401,7 @@ pub unsafe extern "C" fn chewing_handle_ShiftRight(ctx: *mut ChewingContext) -> 
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_Right(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
@@ -1432,7 +1413,7 @@ pub unsafe extern "C" fn chewing_handle_Right(ctx: *mut ChewingContext) -> c_int
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_Up(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
@@ -1443,7 +1424,7 @@ pub unsafe extern "C" fn chewing_handle_Up(ctx: *mut ChewingContext) -> c_int {
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_Home(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
@@ -1454,7 +1435,7 @@ pub unsafe extern "C" fn chewing_handle_Home(ctx: *mut ChewingContext) -> c_int 
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_End(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
@@ -1465,7 +1446,7 @@ pub unsafe extern "C" fn chewing_handle_End(ctx: *mut ChewingContext) -> c_int {
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_PageUp(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
@@ -1477,7 +1458,7 @@ pub unsafe extern "C" fn chewing_handle_PageUp(ctx: *mut ChewingContext) -> c_in
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_PageDown(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
@@ -1489,7 +1470,7 @@ pub unsafe extern "C" fn chewing_handle_PageDown(ctx: *mut ChewingContext) -> c_
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_Down(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
@@ -1500,7 +1481,7 @@ pub unsafe extern "C" fn chewing_handle_Down(ctx: *mut ChewingContext) -> c_int 
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_Capslock(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
@@ -1514,7 +1495,7 @@ pub unsafe extern "C" fn chewing_handle_Capslock(ctx: *mut ChewingContext) -> c_
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_Default(ctx: *mut ChewingContext, key: c_int) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
@@ -1551,7 +1532,7 @@ pub unsafe extern "C" fn chewing_handle_Default(ctx: *mut ChewingContext, key: c
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_CtrlNum(ctx: *mut ChewingContext, key: c_int) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
@@ -1577,7 +1558,7 @@ pub unsafe extern "C" fn chewing_handle_CtrlNum(ctx: *mut ChewingContext, key: c
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_ShiftSpace(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
@@ -1591,7 +1572,7 @@ pub unsafe extern "C" fn chewing_handle_ShiftSpace(ctx: *mut ChewingContext) -> 
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_DblTab(ctx: *mut ChewingContext) -> c_int {
     let _ctx = as_mut_or_return!(ctx, ERROR);
 
@@ -1602,7 +1583,7 @@ pub unsafe extern "C" fn chewing_handle_DblTab(ctx: *mut ChewingContext) -> c_in
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_Numlock(ctx: *mut ChewingContext, key: c_int) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
@@ -1614,7 +1595,7 @@ pub unsafe extern "C" fn chewing_handle_Numlock(ctx: *mut ChewingContext, key: c
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_commit_Check(ctx: *const ChewingContext) -> c_int {
     let ctx = as_ref_or_return!(ctx, ERROR);
 
@@ -1624,7 +1605,7 @@ pub unsafe extern "C" fn chewing_commit_Check(ctx: *const ChewingContext) -> c_i
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_commit_String(ctx: *const ChewingContext) -> *mut c_char {
     let ctx = as_ref_or_return!(
         ctx,
@@ -1642,7 +1623,7 @@ pub unsafe extern "C" fn chewing_commit_String(ctx: *const ChewingContext) -> *m
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_commit_String_static(ctx: *const ChewingContext) -> *const c_char {
     let ctx = as_mut_or_return!(ctx.cast_mut(), global_empty_cstr());
 
@@ -1652,7 +1633,7 @@ pub unsafe extern "C" fn chewing_commit_String_static(ctx: *const ChewingContext
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_buffer_String(ctx: *const ChewingContext) -> *mut c_char {
     let ctx = as_ref_or_return!(
         ctx,
@@ -1670,7 +1651,7 @@ pub unsafe extern "C" fn chewing_buffer_String(ctx: *const ChewingContext) -> *m
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_buffer_String_static(ctx: *const ChewingContext) -> *const c_char {
     let ctx = as_mut_or_return!(ctx.cast_mut(), global_empty_cstr());
 
@@ -1680,7 +1661,7 @@ pub unsafe extern "C" fn chewing_buffer_String_static(ctx: *const ChewingContext
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_buffer_Check(ctx: *const ChewingContext) -> c_int {
     let ctx = as_ref_or_return!(ctx, ERROR);
 
@@ -1690,7 +1671,7 @@ pub unsafe extern "C" fn chewing_buffer_Check(ctx: *const ChewingContext) -> c_i
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_buffer_Len(ctx: *const ChewingContext) -> c_int {
     let ctx = as_ref_or_return!(ctx, ERROR);
 
@@ -1700,7 +1681,7 @@ pub unsafe extern "C" fn chewing_buffer_Len(ctx: *const ChewingContext) -> c_int
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_bopomofo_String_static(
     ctx: *const ChewingContext,
 ) -> *const c_char {
@@ -1712,7 +1693,25 @@ pub unsafe extern "C" fn chewing_bopomofo_String_static(
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn chewing_bopomofo_String(ctx: *const ChewingContext) -> *mut c_char {
+    let ctx = as_ref_or_return!(
+        ctx,
+        owned_into_raw(Owned::CString, CString::default().into_raw())
+    );
+
+    let buffer = ctx.editor.syllable_buffer_display();
+    let cstr = match CString::new(buffer) {
+        Ok(cstr) => cstr,
+        Err(_) => return null_mut(),
+    };
+    owned_into_raw(Owned::CString, cstr.into_raw())
+}
+
+/// # Safety
+///
+/// This function should be called with valid pointers.
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_bopomofo_Check(ctx: *const ChewingContext) -> c_int {
     let ctx = as_ref_or_return!(ctx, ERROR);
 
@@ -1722,7 +1721,7 @@ pub unsafe extern "C" fn chewing_bopomofo_Check(ctx: *const ChewingContext) -> c
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_cursor_Current(ctx: *const ChewingContext) -> c_int {
     let ctx = as_ref_or_return!(ctx, ERROR);
 
@@ -1733,7 +1732,7 @@ pub unsafe extern "C" fn chewing_cursor_Current(ctx: *const ChewingContext) -> c
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_cand_CheckDone(ctx: *const ChewingContext) -> c_int {
     let ctx = as_ref_or_return!(ctx, ERROR);
 
@@ -1747,7 +1746,7 @@ pub unsafe extern "C" fn chewing_cand_CheckDone(ctx: *const ChewingContext) -> c
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_cand_TotalPage(ctx: *const ChewingContext) -> c_int {
     let ctx = as_ref_or_return!(ctx, ERROR);
 
@@ -1757,7 +1756,7 @@ pub unsafe extern "C" fn chewing_cand_TotalPage(ctx: *const ChewingContext) -> c
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_cand_ChoicePerPage(ctx: *const ChewingContext) -> c_int {
     let ctx = as_ref_or_return!(ctx, ERROR);
 
@@ -1767,7 +1766,7 @@ pub unsafe extern "C" fn chewing_cand_ChoicePerPage(ctx: *const ChewingContext) 
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_cand_TotalChoice(ctx: *const ChewingContext) -> c_int {
     let ctx = as_ref_or_return!(ctx, ERROR);
 
@@ -1780,7 +1779,7 @@ pub unsafe extern "C" fn chewing_cand_TotalChoice(ctx: *const ChewingContext) ->
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_cand_CurrentPage(ctx: *const ChewingContext) -> c_int {
     let ctx = as_ref_or_return!(ctx, ERROR);
 
@@ -1790,7 +1789,7 @@ pub unsafe extern "C" fn chewing_cand_CurrentPage(ctx: *const ChewingContext) ->
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_cand_Enumerate(ctx: *mut ChewingContext) {
     let ctx = as_mut_or_return!(ctx);
 
@@ -1804,7 +1803,7 @@ pub unsafe extern "C" fn chewing_cand_Enumerate(ctx: *mut ChewingContext) {
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_cand_hasNext(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
@@ -1821,7 +1820,7 @@ pub unsafe extern "C" fn chewing_cand_hasNext(ctx: *mut ChewingContext) -> c_int
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_cand_String(ctx: *mut ChewingContext) -> *mut c_char {
     let ctx = as_mut_or_return!(
         ctx,
@@ -1843,7 +1842,7 @@ pub unsafe extern "C" fn chewing_cand_String(ctx: *mut ChewingContext) -> *mut c
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_cand_String_static(ctx: *mut ChewingContext) -> *const c_char {
     let ctx = as_mut_or_return!(ctx, global_empty_cstr());
 
@@ -1856,7 +1855,7 @@ pub unsafe extern "C" fn chewing_cand_String_static(ctx: *mut ChewingContext) ->
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_cand_string_by_index(
     ctx: *mut ChewingContext,
     index: c_int,
@@ -1870,7 +1869,9 @@ pub unsafe extern "C" fn chewing_cand_string_by_index(
         if let Some(phrase) = phrases.get(index as usize) {
             return owned_into_raw(
                 Owned::CString,
-                CString::new(phrase.to_owned()).unwrap().into_raw(),
+                CString::new(phrase.to_owned())
+                    .expect("phrase should be valid UTF-8")
+                    .into_raw(),
             );
         }
     }
@@ -1880,7 +1881,7 @@ pub unsafe extern "C" fn chewing_cand_string_by_index(
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_cand_string_by_index_static(
     ctx: *mut ChewingContext,
     index: c_int,
@@ -1898,7 +1899,7 @@ pub unsafe extern "C" fn chewing_cand_string_by_index_static(
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_cand_choose_by_index(
     ctx: *mut ChewingContext,
     index: c_int,
@@ -1914,7 +1915,7 @@ pub unsafe extern "C" fn chewing_cand_choose_by_index(
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_cand_open(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
@@ -1927,7 +1928,7 @@ pub unsafe extern "C" fn chewing_cand_open(ctx: *mut ChewingContext) -> c_int {
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_cand_close(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
@@ -1941,7 +1942,7 @@ pub unsafe extern "C" fn chewing_cand_close(ctx: *mut ChewingContext) -> c_int {
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_interval_Enumerate(ctx: *mut ChewingContext) {
     let ctx = as_mut_or_return!(ctx);
 
@@ -1955,7 +1956,7 @@ pub unsafe extern "C" fn chewing_interval_Enumerate(ctx: *mut ChewingContext) {
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_interval_hasNext(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
@@ -1970,7 +1971,7 @@ pub unsafe extern "C" fn chewing_interval_hasNext(ctx: *mut ChewingContext) -> c
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_interval_Get(ctx: *mut ChewingContext, it: *mut IntervalType) {
     let ctx = as_mut_or_return!(ctx);
 
@@ -1991,7 +1992,7 @@ pub unsafe extern "C" fn chewing_interval_Get(ctx: *mut ChewingContext, it: *mut
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_aux_Check(ctx: *const ChewingContext) -> c_int {
     let ctx = as_ref_or_return!(ctx, ERROR);
 
@@ -2001,7 +2002,7 @@ pub unsafe extern "C" fn chewing_aux_Check(ctx: *const ChewingContext) -> c_int 
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_aux_Length(ctx: *const ChewingContext) -> c_int {
     let ctx = as_ref_or_return!(ctx, ERROR);
 
@@ -2011,21 +2012,22 @@ pub unsafe extern "C" fn chewing_aux_Length(ctx: *const ChewingContext) -> c_int
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_aux_String(ctx: *const ChewingContext) -> *mut c_char {
     let ctx = match unsafe { ctx.as_ref() } {
         Some(ctx) => ctx,
         None => return owned_into_raw(Owned::CString, CString::default().into_raw()),
     };
 
-    let cstring = CString::new(ctx.editor.notification()).unwrap();
+    let cstring =
+        CString::new(ctx.editor.notification()).expect("notification should be valid UTF-8");
     owned_into_raw(Owned::CString, cstring.into_raw())
 }
 
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_aux_String_static(ctx: *const ChewingContext) -> *const c_char {
     let ctx = as_mut_or_return!(ctx.cast_mut(), global_empty_cstr());
 
@@ -2035,7 +2037,7 @@ pub unsafe extern "C" fn chewing_aux_String_static(ctx: *const ChewingContext) -
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_keystroke_CheckIgnore(ctx: *const ChewingContext) -> c_int {
     let ctx = as_ref_or_return!(ctx, ERROR);
 
@@ -2048,7 +2050,7 @@ pub unsafe extern "C" fn chewing_keystroke_CheckIgnore(ctx: *const ChewingContex
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_keystroke_CheckAbsorb(ctx: *const ChewingContext) -> c_int {
     let ctx = as_ref_or_return!(ctx, ERROR);
 
@@ -2061,7 +2063,7 @@ pub unsafe extern "C" fn chewing_keystroke_CheckAbsorb(ctx: *const ChewingContex
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_kbtype_Total(_ctx: *const ChewingContext) -> c_int {
     (0..)
         .map_while(|id| KeyboardLayoutCompat::try_from(id).ok())
@@ -2071,7 +2073,7 @@ pub unsafe extern "C" fn chewing_kbtype_Total(_ctx: *const ChewingContext) -> c_
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_kbtype_Enumerate(ctx: *mut ChewingContext) {
     let ctx = as_mut_or_return!(ctx);
 
@@ -2085,7 +2087,7 @@ pub unsafe extern "C" fn chewing_kbtype_Enumerate(ctx: *mut ChewingContext) {
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_kbtype_hasNext(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
@@ -2098,7 +2100,7 @@ pub unsafe extern "C" fn chewing_kbtype_hasNext(ctx: *mut ChewingContext) -> c_i
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_kbtype_String(ctx: *mut ChewingContext) -> *mut c_char {
     let ctx = as_mut_or_return!(
         ctx,
@@ -2120,7 +2122,7 @@ pub unsafe extern "C" fn chewing_kbtype_String(ctx: *mut ChewingContext) -> *mut
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_kbtype_String_static(ctx: *mut ChewingContext) -> *const c_char {
     let ctx = as_mut_or_return!(ctx, global_empty_cstr());
 
@@ -2133,7 +2135,7 @@ pub unsafe extern "C" fn chewing_kbtype_String_static(ctx: *mut ChewingContext) 
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 #[deprecated]
 pub unsafe extern "C" fn chewing_zuin_Check(ctx: *const ChewingContext) -> c_int {
     unsafe { chewing_bopomofo_Check(ctx) ^ 1 }
@@ -2142,7 +2144,7 @@ pub unsafe extern "C" fn chewing_zuin_Check(ctx: *const ChewingContext) -> c_int
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 #[deprecated]
 pub unsafe extern "C" fn chewing_zuin_String(
     ctx: *const ChewingContext,
@@ -2167,7 +2169,7 @@ pub unsafe extern "C" fn chewing_zuin_String(
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 #[deprecated]
 pub unsafe extern "C" fn chewing_Init(data_path: *const c_char, hash_path: *const c_char) -> c_int {
     let _ = hash_path;
@@ -2178,14 +2180,14 @@ pub unsafe extern "C" fn chewing_Init(data_path: *const c_char, hash_path: *cons
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 #[deprecated]
 pub unsafe extern "C" fn chewing_Terminate() {}
 
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 #[deprecated]
 pub unsafe extern "C" fn chewing_Configure(
     ctx: *mut ChewingContext,
@@ -2213,7 +2215,7 @@ pub unsafe extern "C" fn chewing_Configure(
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 #[deprecated]
 pub unsafe extern "C" fn chewing_set_hsuSelKeyType(_ctx: *mut ChewingContext, mode: c_int) {
     let _ = mode;
@@ -2222,7 +2224,7 @@ pub unsafe extern "C" fn chewing_set_hsuSelKeyType(_ctx: *mut ChewingContext, mo
 /// # Safety
 ///
 /// This function should be called with valid pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 #[deprecated]
 pub unsafe extern "C" fn chewing_get_hsuSelKeyType(_ctx: *mut ChewingContext) -> c_int {
     OK

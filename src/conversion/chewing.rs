@@ -35,6 +35,9 @@ impl ChewingEngine {
                 return vec![PossiblePath::default()];
             }
             let intervals = self.find_intervals(dict, comp);
+            if intervals.is_empty() {
+                return vec![PossiblePath::default()];
+            }
             let paths = self.find_k_paths(Self::MAX_OUT_PATHS, comp.len(), intervals);
             trace!("paths: {:#?}", paths);
             debug_assert!(!paths.is_empty());
@@ -115,8 +118,7 @@ impl ChewingEngine {
                 // There's a conflicting partial intersecting selection.
                 trace!(
                     "No best phrase for {:?} due to selection {:?}",
-                    symbols,
-                    selection
+                    symbols, selection
                 );
                 return None;
             }
@@ -177,16 +179,12 @@ impl ChewingEngine {
         com: &Composition,
     ) -> Vec<PossibleInterval> {
         let mut intervals = vec![];
-        for begin in 0..com.symbols.len() {
-            for end in begin..=com.symbols.len() {
+        for start in 0..com.symbols.len() {
+            for end in (start + 1)..=com.symbols.len() {
                 if let Some(phrase) =
-                    self.find_best_phrase(dict, begin, &com.symbols[begin..end], com)
+                    self.find_best_phrase(dict, start, &com.symbols[start..end], com)
                 {
-                    intervals.push(PossibleInterval {
-                        start: begin,
-                        end,
-                        phrase,
-                    });
+                    intervals.push(PossibleInterval { start, end, phrase });
                 }
             }
         }
@@ -596,6 +594,31 @@ mod tests {
         );
     }
 
+    // Some corrupted user dictionary may contain empty length syllables
+    #[test]
+    fn convert_zero_length_entry() {
+        let mut dict = test_dictionary();
+        let dict_mut = dict.as_dict_mut().unwrap();
+        dict_mut.add_phrase(&[], ("", 0).into()).unwrap();
+        let engine = ChewingEngine::new();
+        let mut composition = Composition::new();
+        for sym in [
+            Symbol::from(syl![C, E, TONE4]),
+            Symbol::from(syl![SH, TONE4]),
+        ] {
+            composition.push(sym);
+        }
+        assert_eq!(
+            Some(vec![Interval {
+                start: 0,
+                end: 2,
+                is_phrase: true,
+                str: "測試".into()
+            },]),
+            engine.convert(&dict, &composition).next()
+        );
+    }
+
     #[test]
     fn convert_simple_chinese_composition() {
         let dict = test_dictionary();
@@ -887,7 +910,7 @@ mod tests {
         }
         assert_eq!(
             40,
-            engine.convert(&dict, &composition).nth(0).unwrap().len()
+            engine.convert(&dict, &composition).next().unwrap().len()
         );
         assert_eq!(
             41,
