@@ -1396,10 +1396,16 @@ void test_FuzzySearchMode_Hanyu()
 void test_SimpleEngine()
 {
     const TestData SIMPLE_INPUT[] = {
-        {"ru03120 15j41up 1ai61g41!<E>", "簡單住因模市！" },
-        {"ru03<EE>20 <EE>5j4<EE>up <EE>ai6<EE>g4<EE>!<E>", "簡單住因模市！" },
-        {"ru03120 15j44up 2ai61g4<D>2!<E>", "簡單注音模式！" },
-        {"ru03120 15j44up 2ai61g4<D>2!<H>20 1tjp61<E>", "單純簡單注音模式！" },
+        {"ru031", "簡" },
+        {"20 1", "單" },
+        {"5j41", "住" },
+        {"up 1", "因" },
+        {"ai61", "模" },
+        {"g41", "市" },
+        {"!", "！" },
+        {"ru03<EE>", "" },
+        {"ru03<D>1", "筧" },
+        {"ru03<D><EE>", "" },
     };
     size_t i;
     ChewingContext *ctx;
@@ -1429,6 +1435,22 @@ void test_Acknowledge()
 
     chewing_ack(ctx);
     ok_commit_buffer(ctx, "");
+
+    chewing_delete(ctx);
+}
+
+void test_BellCondition()
+{
+    ChewingContext *ctx;
+
+    ctx = chewing_new();
+    start_testcase(ctx);
+
+    type_keystroke_by_string(ctx, "zp zp<E>");
+    ok_preedit_buffer(ctx, "分");
+    ok_bopomofo_buffer(ctx, "ㄈㄣ");
+    ok_commit_buffer(ctx, "");
+    ok_keystroke_rtn(ctx, KEYSTROKE_ABSORB);
 
     chewing_delete(ctx);
 }
@@ -1501,6 +1523,26 @@ void test_bopomofo_buffer()
 
     type_keystroke_by_string(ctx, " ");
     ok_bopomofo_buffer(ctx, "");
+
+    chewing_delete(ctx);
+}
+
+void test_five_word_phrase()
+{
+    ChewingContext *ctx;
+    IntervalType it;
+
+    ctx = chewing_new();
+    start_testcase(ctx);
+
+    type_keystroke_by_string(ctx, "g4ru,442u4fu.6b4" /* ㄕˋ ㄐㄧㄝˋ ㄉㄧˋ ㄑㄧㄡˊ ㄖˋ */ );
+    ok_preedit_buffer(ctx, "世界地球日");
+
+    chewing_interval_Enumerate(ctx);
+
+    ok(chewing_interval_hasNext(ctx) == 1, "shall have next interval");
+    chewing_interval_Get(ctx, &it);
+    ok(it.from == 0 && it.to == 5, "interval (%d, %d) shall be (0, 5)", it.from, it.to);
 
     chewing_delete(ctx);
 }
@@ -2458,10 +2500,12 @@ int main(int argc, char *argv[])
     test_FuzzySearchMode_Hanyu();
     test_SimpleEngine();
     test_Acknowledge();
+    test_BellCondition();
 
     test_get_phoneSeq();
     test_bopomofo_buffer();
 
+    test_five_word_phrase();
     test_longest_phrase();
     test_auto_commit();
 

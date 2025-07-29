@@ -83,7 +83,11 @@ pub(crate) fn run(args: flags::InitDatabase) -> Result<()> {
             continue;
         }
         let line = line?;
-        match parse_line(line_num, delimiter, &line, args.keep_word_freq) {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        match parse_line(line_num, delimiter, &line, args.keep_word_freq, args.fix) {
             Ok((syllables, phrase, freq)) => builder.insert(&syllables, (phrase, freq).into())?,
             Err(error) => errors.push(error),
         };
@@ -91,6 +95,9 @@ pub(crate) fn run(args: flags::InitDatabase) -> Result<()> {
     if !errors.is_empty() {
         for err in errors {
             eprintln!("{}", err);
+        }
+        if !args.fix {
+            eprintln!("Hint: Use --fix to automatically fix common errors");
         }
         if !args.skip_invalid {
             std::process::exit(1)
@@ -122,6 +129,7 @@ fn parse_line(
     delimiter: char,
     line: &str,
     keep_word_freq: bool,
+    fix: bool,
 ) -> Result<(Vec<Syllable>, &str, u32)> {
     let phrase = line
         .split(delimiter)
@@ -159,6 +167,11 @@ fn parse_line(
             break;
         }
         for c in syllable_str.chars() {
+            let c = if fix {
+                fix_common_syllable_errors(c)
+            } else {
+                c
+            };
             syllable_builder = syllable_builder
                 .insert(
                     Bopomofo::try_from(c)
@@ -174,6 +187,14 @@ fn parse_line(
     Ok((syllables, phrase, freq))
 }
 
+fn fix_common_syllable_errors(c: char) -> char {
+    match c {
+        '一' => 'ㄧ',
+        '丫' => 'ㄚ',
+        _ => c,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use chewing::syl;
@@ -184,7 +205,7 @@ mod tests {
     #[test]
     fn parse_ssv() {
         let line = "鑰匙 668 ㄧㄠˋ ㄔˊ # not official";
-        if let Ok((syllables, phrase, freq)) = parse_line(0, ' ', &line, false) {
+        if let Ok((syllables, phrase, freq)) = parse_line(0, ' ', &line, false, false) {
             assert_eq!(syllables, vec![syl![I, AU, TONE4], syl![CH, TONE2]]);
             assert_eq!("鑰匙", phrase);
             assert_eq!(668, freq);
@@ -196,7 +217,7 @@ mod tests {
     #[test]
     fn parse_ssv_multiple_whitespace() {
         let line = "鑰匙     668 ㄧㄠˋ ㄔˊ # not official";
-        if let Ok((syllables, phrase, freq)) = parse_line(0, ' ', &line, false) {
+        if let Ok((syllables, phrase, freq)) = parse_line(0, ' ', &line, false, false) {
             assert_eq!(syllables, vec![syl![I, AU, TONE4], syl![CH, TONE2]]);
             assert_eq!("鑰匙", phrase);
             assert_eq!(668, freq);
@@ -206,9 +227,29 @@ mod tests {
     }
 
     #[test]
+    fn parse_ssv_syllable_errors() {
+        let line = "地永天長 50 ㄉ一ˋ ㄩㄥˇ ㄊ一ㄢ ㄔ丫ˊ";
+        if let Ok((syllables, phrase, freq)) = parse_line(0, ' ', &line, false, true) {
+            assert_eq!(
+                syllables,
+                vec![
+                    syl![D, I, TONE4],
+                    syl![IU, ENG, TONE3],
+                    syl![T, I, AN],
+                    syl![CH, A, TONE2]
+                ]
+            );
+            assert_eq!("地永天長", phrase);
+            assert_eq!(50, freq);
+        } else {
+            panic!()
+        }
+    }
+
+    #[test]
     fn parse_csv() {
         let line = "鑰匙,668,ㄧㄠˋ ㄔˊ # not official";
-        if let Ok((syllables, phrase, freq)) = parse_line(0, ',', &line, false) {
+        if let Ok((syllables, phrase, freq)) = parse_line(0, ',', &line, false, false) {
             assert_eq!(syllables, vec![syl![I, AU, TONE4], syl![CH, TONE2]]);
             assert_eq!("鑰匙", phrase);
             assert_eq!(668, freq);
@@ -220,7 +261,7 @@ mod tests {
     #[test]
     fn parse_csv_quoted() {
         let line = "\"鑰匙\",668,\"ㄧㄠˋ ㄔˊ # not official\"";
-        if let Ok((syllables, phrase, freq)) = parse_line(0, ',', &line, false) {
+        if let Ok((syllables, phrase, freq)) = parse_line(0, ',', &line, false, false) {
             assert_eq!(syllables, vec![syl![I, AU, TONE4], syl![CH, TONE2]]);
             assert_eq!("鑰匙", phrase);
             assert_eq!(668, freq);

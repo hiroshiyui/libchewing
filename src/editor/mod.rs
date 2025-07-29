@@ -247,6 +247,9 @@ impl Editor {
     pub fn ack(&mut self) {
         self.shared.commit_buffer.clear();
     }
+    pub fn clear_composition_editor(&mut self) {
+        self.shared.com.clear();
+    }
     pub fn clear_syllable_editor(&mut self) {
         self.shared.syl.clear();
     }
@@ -396,7 +399,7 @@ impl Editor {
         &self.shared.commit_buffer
     }
     pub fn commit(&mut self) -> Result<(), EditorError> {
-        if !self.is_entering() || self.shared.com.is_empty() {
+        if self.shared.com.is_empty() {
             return Err(EditorError::InvalidState);
         }
         self.shared.commit();
@@ -543,7 +546,7 @@ impl SharedState {
         let result = self.learn_phrase_in_range_quiet(start, end);
         match &result {
             Ok(phrase) => {
-                self.notice_buffer = format!("加入：{}", phrase);
+                self.notice_buffer = format!("加入：{phrase}");
                 Ok(())
             }
             Err(msg) => {
@@ -581,14 +584,12 @@ impl SharedState {
             return Err(format!("已有：{phrase}"));
         }
         let result = self
-            .dict
-            .add_phrase(&syllables, (phrase.as_ref(), 100).into())
-            .map(|_| phrase)
+            .learn_phrase(&syllables, &phrase)
             .map_err(|_| "加詞失敗：字數不符或夾雜符號".to_owned());
         if result.is_ok() {
             self.dirty_level += 1;
         }
-        result
+        result.map(|_| phrase)
     }
     fn learn_phrase(
         &mut self,
@@ -766,6 +767,13 @@ impl BasicEditor for Editor {
             Transition::Spin(behavior) => self.shared.last_key_behavior = behavior,
         }
 
+        if self.shared.options.conversion_engine == ConversionEngineKind::SimpleEngine
+            && self.is_entering()
+            && !self.shared.com.is_empty()
+        {
+            self.shared.commit();
+        }
+
         if self.is_entering() && self.shared.last_key_behavior == EditorKeyBehavior::Absorb {
             self.shared.try_auto_commit();
         }
@@ -846,7 +854,11 @@ impl Entering {
         }
     }
     fn start_symbol_input(&self, editor: &mut SharedState) -> Transition {
-        Transition::ToState(Box::new(Selecting::new_symbol(editor)))
+        if editor.sym_sel.is_empty() {
+            self.spin_bell()
+        } else {
+            Transition::ToState(Box::new(Selecting::new_symbol(editor)))
+        }
     }
     fn start_enter_syllable(&self) -> Transition {
         Transition::ToState(Box::new(EnteringSyllable))
@@ -1034,25 +1046,16 @@ impl State for Entering {
                             }
                         }
                     }
-                    LanguageMode::Chinese if shared.options.easy_symbol_input => {
-                        // Priortize symbol input
-                        if let Some(expended) = shared.abbr.find_abbrev(ev.unicode) {
-                            expended
-                                .chars()
-                                .for_each(|ch| shared.com.insert(Symbol::from(ch)));
-                            return self.spin_absorb();
-                        }
-                        if let Some(symbol) = special_symbol_input(ev.unicode) {
-                            shared.com.insert(Symbol::from(symbol));
-                            return self.spin_absorb();
-                        }
-                        if ev.modifiers.is_none() && KeyBehavior::Absorb == shared.syl.key_press(ev)
-                        {
-                            return self.start_enter_syllable();
-                        }
-                        self.spin_bell()
-                    }
                     LanguageMode::Chinese => {
+                        if shared.options.easy_symbol_input && ev.modifiers.shift {
+                            // Priortize symbol input
+                            if let Some(expended) = shared.abbr.find_abbrev(ev.unicode) {
+                                expended
+                                    .chars()
+                                    .for_each(|ch| shared.com.insert(Symbol::from(ch)));
+                                return self.spin_absorb();
+                            }
+                        }
                         if ev.modifiers.is_none() && KeyBehavior::Absorb == shared.syl.key_press(ev)
                         {
                             return self.start_enter_syllable();
@@ -1467,6 +1470,9 @@ impl State for Selecting {
             Esc => {
                 shared.cancel_selecting();
                 shared.com.pop_cursor();
+                if shared.options.conversion_engine == ConversionEngineKind::SimpleEngine {
+                    shared.com.clear();
+                }
                 self.start_entering()
             }
             Del => {
@@ -1807,5 +1813,22 @@ mod tests {
     }
 
     #[test]
-    fn editing_mode_input_symbol() {}
+    fn editing_mode_open_empty_symbol_table_then_bell() {
+        let keyboard = Qwerty;
+        let dict = Layered::new(
+            vec![Box::new(TrieBuf::new_in_memory())],
+            Box::new(TrieBuf::new_in_memory()),
+        );
+        let conversion_engine = Box::new(ChewingEngine::new());
+        let estimate = LaxUserFreqEstimate::new(0);
+        let abbrev = AbbrevTable::new();
+        let sym_sel = SymbolSelector::default();
+        let mut editor = Editor::new(conversion_engine, dict, estimate, abbrev, sym_sel);
+
+        let ev = keyboard.map(KeyCode::Grave);
+        let key_behavior = editor.process_keyevent(ev);
+
+        assert_eq!(EditorKeyBehavior::Bell, key_behavior);
+        assert_eq!(syl![], editor.syllable_buffer());
+    }
 }

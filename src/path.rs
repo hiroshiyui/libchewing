@@ -3,21 +3,36 @@
 use std::{
     env,
     ffi::OsStr,
+    fs,
+    io::ErrorKind,
     path::{Path, PathBuf},
 };
 
 use log::{info, warn};
 
-const DEFAULT_UNIX_SYS_PATH: &str = "/usr/share/libchewing";
-const UNIX_SYS_PATH: Option<&str> = option_env!("CHEWING_DATADIR");
+#[cfg(target_family = "windows")]
+const DEFAULT_SYS_PATH: &str = "C:\\Program Files\\ChewingTextService\\Dictionary";
+#[cfg(target_family = "unix")]
+const DEFAULT_SYS_PATH: &str = "/usr/share/libchewing";
+const SYS_PATH: Option<&str> = option_env!("CHEWING_DATADIR");
 
 #[cfg(target_family = "windows")]
 const SEARCH_PATH_SEP: char = ';';
-
 #[cfg(target_family = "unix")]
 const SEARCH_PATH_SEP: char = ':';
 
 const DICT_FOLDER: &str = "dictionary.d";
+
+// On Windows if a low integrity process tries to write to a higher integrity
+// process, it fails with PermissionDenied error. Current `fs::exists()` in Rust
+// happens to use CreateFile to check if a file exists that triggers this error.
+fn file_exists(path: &Path) -> bool {
+    match fs::exists(path) {
+        Ok(true) => true,
+        Ok(false) => false,
+        Err(error) => matches!(error.kind(), ErrorKind::PermissionDenied),
+    }
+}
 
 pub(crate) fn sys_path_from_env_var() -> String {
     let chewing_path = env::var("CHEWING_PATH");
@@ -26,9 +41,9 @@ pub(crate) fn sys_path_from_env_var() -> String {
         chewing_path
     } else {
         let user_datadir = data_dir();
-        let sys_datadir = UNIX_SYS_PATH.unwrap_or(DEFAULT_UNIX_SYS_PATH);
+        let sys_datadir = SYS_PATH.unwrap_or(DEFAULT_SYS_PATH);
         let chewing_path = if let Some(datadir) = user_datadir.as_ref().and_then(|p| p.to_str()) {
-            format!("{datadir}:{sys_datadir}")
+            format!("{datadir}{SEARCH_PATH_SEP}{sys_datadir}")
         } else {
             sys_datadir.into()
         };
@@ -48,7 +63,7 @@ pub(crate) fn find_path_by_files(search_path: &str, files: &[&str]) -> Option<Pa
                 path.push(it);
                 path
             })
-            .all(|it| it.exists())
+            .all(|it| file_exists(&it))
         {
             info!("Found {:?} in {}", files, prefix.display());
             return Some(prefix);
@@ -106,7 +121,7 @@ pub fn data_dir() -> Option<PathBuf> {
         return Some(path.into());
     }
     if let Some(path) = legacy_data_dir() {
-        if path.exists() && path.is_dir() {
+        if file_exists(&path) && path.is_dir() {
             info!("Using legacy userpath: {}", path.display());
             return Some(path);
         }
@@ -120,9 +135,6 @@ pub fn data_dir() -> Option<PathBuf> {
     data_dir
 }
 
-// home_dir() is fixed in rust 1.85 and will be marked as
-// undeprecated in rust 1.87
-#[allow(deprecated)]
 fn project_data_dir() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     {
@@ -152,9 +164,6 @@ fn project_data_dir() -> Option<PathBuf> {
     }
 }
 
-// home_dir() is fixed in rust 1.85 and will be marked as
-// undeprecated in rust 1.87
-#[allow(deprecated)]
 fn legacy_data_dir() -> Option<PathBuf> {
     if cfg!(target_os = "windows") {
         return env::home_dir().map(|path| path.join("ChewingTextService"));
