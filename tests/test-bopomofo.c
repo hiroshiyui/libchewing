@@ -1827,7 +1827,7 @@ void test_KB_HSU_example()
     ok_preedit_buffer(ctx, "三歲到五歲的小孩五到十人");
     chewing_clean_preedit_buf(ctx);
 
-    type_keystroke_by_string(ctx, "jxl cewjdxl lxjxfdxmjleojcde cekj<D><D>1xfnxljcdve hwjjeoflod");
+    type_keystroke_by_string(ctx, "jxl cewjdxl lxjxfdxmjleojcde cekj<D><D>1xfnxljcdve hwj<D>1jeoflod");
     ok_preedit_buffer(ctx, "忠孝東路五段六十一巷五弄十七號九樓");
     chewing_clean_preedit_buf(ctx);
 
@@ -1961,6 +1961,25 @@ void test_KB_HSU_JVC()
     type_keystroke_by_string(ctx, "<B><B>k");
     ok_bopomofo_buffer(ctx, "\xE3\x84\x95\xE3\x84\xA4" /* ㄕㄤ */ );
     chewing_clean_preedit_buf(ctx);
+
+    chewing_delete(ctx);
+}
+
+void test_KB_ET()
+{
+    ChewingContext *ctx;
+    ctx = chewing_new();
+    start_testcase(ctx);
+
+    chewing_set_KBType(ctx, KB_ET);
+    chewing_set_maxChiSymbolLen(ctx, 20);
+
+    type_keystroke_by_string(ctx, "hx3b8 p04mz ;y37u4'z3de4<E>");
+    ok_commit_buffer(ctx, "虎斑胖貓走去草地");
+    type_keystroke_by_string(ctx, "k84nez3=2;i4/x4/04tez4uw4j04ta <D>3ge84lew4ce9 ce3<E>");
+    ok_commit_buffer(ctx, "看鳥兒在樹上跳躍讓她見獵心喜");
+    type_keystroke_by_string(ctx, "vx- <D>9sxo ,r1/9 ;1ez4fq b9 .x 7u4<E>");
+    ok_commit_buffer(ctx, "弓縮著身子要飛奔出去");
 
     chewing_delete(ctx);
 }
@@ -2158,6 +2177,43 @@ void test_KB_DACHEN_CP26()
     chewing_delete(ctx);
 }
 
+void test_KB_GIN_YIEH()
+{
+    ChewingContext *ctx;
+    ctx = chewing_new();
+    start_testcase(ctx);
+
+    chewing_set_KBType(ctx, KB_GIN_YIEH);
+    chewing_set_maxChiSymbolLen(ctx, 20);
+
+    type_keystroke_by_string(ctx, "v[a20 w;zsl u.ag'zjla3-z<E>");
+    ok_commit_buffer(ctx, "虎斑胖貓走去草地");
+    type_keystroke_by_string(ctx, "f0zd-la=qu9zh[zh;ze-lz',zn;ze8 <D>3t-0zc-,zb-p b-a<E>");
+    ok_commit_buffer(ctx, "看鳥兒在樹上跳躍讓她見獵心喜");
+    type_keystroke_by_string(ctx, "r[/ <D>9m[i 6k1hp u1-lzxo 2p y[ g'z<E>");
+    ok_commit_buffer(ctx, "弓縮著身子要飛奔出去");
+
+    chewing_delete(ctx);
+}
+
+void test_KB_IBM()
+{
+    ChewingContext *ctx;
+    ctx = chewing_new();
+    start_testcase(ctx);
+
+    chewing_set_KBType(ctx, KB_IBM);
+    chewing_set_maxChiSymbolLen(ctx, 20);
+
+    type_keystroke_by_string(ctx, "-s,1x 2v.3; iz,wd.o;,5a.<E>");
+    ok_commit_buffer(ctx, "虎斑胖貓走去草地");
+    type_keystroke_by_string(ctx, "0x.7a;,nmik.ys.yv.6a;.dj.uv.6f <D>3qax.8aj.eac ea,<E>");
+    ok_commit_buffer(ctx, "看鳥兒在樹上跳躍讓她見獵心喜");
+    type_keystroke_by_string(ctx, "9sb <D>9psg rh/yc i/a;.4l 1c ts wd.<E>");
+    ok_commit_buffer(ctx, "弓縮著身子要飛奔出去");
+
+    chewing_delete(ctx);
+}
 
 void test_KB_HANYU()
 {
@@ -2360,9 +2416,12 @@ void test_KB()
     test_KB_HSU_choice_append();
     test_KB_HSU_choice_append_select();
     test_KB_HSU_JVC();
+    test_KB_ET();
     test_KB_ET26();
     test_KB_ET26_choice_append();
     test_KB_DACHEN_CP26();
+    test_KB_GIN_YIEH();
+    test_KB_IBM();
     test_KB_DVORAK();
     test_KB_DVORAK_HSU();
     test_KB_COLEMAK();

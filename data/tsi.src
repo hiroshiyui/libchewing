@@ -122222,6 +122222,7 @@
 虎穴 191 ㄏㄨˇ ㄒㄩㄝˋ
 虎符 2 ㄏㄨˇ ㄈㄨˊ
 虎紋 17 ㄏㄨˇ ㄨㄣˊ
+虎斑 17 ㄏㄨˇ ㄅㄢ
 虎耳 8 ㄏㄨˇ ㄦˇ
 虎耳草 4 ㄏㄨˇ ㄦˇ ㄘㄠˇ
 虎背 3 ㄏㄨˇ ㄅㄟˋ
@@ -158029,12 +158030,8 @@
 𪐴 1 ㄓㄨˇ
 𪑛 1 ㄇㄟˊ
 𪘁 1 ㄊㄚˋ
-
-# ==== imported from libchewing-data ====
-# TODO: sort them back to the list above
-
-一上場 11 ㄧ ㄕㄤˋ ㄔㄤˊ
-一上場 11 ㄧˊ ㄕㄤˋ ㄔㄤˊ
+一上場 11 ㄧ ㄕㄤˋ ㄔㄤˊ  # ||||| imported from libchewing-data
+一上場 11 ㄧˊ ㄕㄤˋ ㄔㄤˊ # vvvvv TODO: sort them back to the list above
 一下場 1 ㄧ ㄒㄧㄚˋ ㄔㄤˊ
 一下場 1 ㄧˊ ㄒㄧㄚˋ ㄔㄤˊ
 一併處理 12 ㄧ ㄅㄧㄥˋ ㄔㄨˋ ㄌㄧˇ
