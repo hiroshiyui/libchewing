@@ -16,11 +16,20 @@ use chewing::{
     editor::{
         AbbrevTable, BasicEditor, CharacterForm, ConversionEngineKind, Editor, EditorKeyBehavior,
         LanguageMode, LaxUserFreqEstimate, SymbolSelector, UserPhraseAddDirection,
-        keyboard::{AnyKeyboardLayout, KeyCode, KeyboardLayout, Modifiers, Qwerty},
         zhuyin_layout::{
             DaiChien26, Et, Et26, GinYieh, Hsu, Ibm, KeyboardLayoutCompat, Pinyin, Standard,
             SyllableEditor,
         },
+    },
+    input::{
+        KeyboardEvent,
+        keycode::*,
+        keymap::{
+            DVORAK_MAP, INVERTED_COLEMAK_DH_ANSI_MAP, INVERTED_COLEMAK_DH_ORTH_MAP,
+            INVERTED_COLEMAK_MAP, INVERTED_DVORAK_MAP, INVERTED_WORKMAN_MAP, Keymap, QWERTY_MAP,
+            map_ascii,
+        },
+        keysym::*,
     },
     zhuyin::Syllable,
 };
@@ -90,11 +99,28 @@ unsafe fn str_from_ptr_with_nul<'a>(ptr: *const c_char) -> Option<&'a str> {
         .and_then(|data| str::from_utf8(unsafe { mem::transmute::<&[c_char], &[u8]>(data) }).ok())
 }
 
+/// Creates a new instance of the Chewing IM.
+///
+/// The return value is a pointer to the new Chewing IM instance.
+///
+/// See also the [chewing_new2], and [chewing_delete] functions.
 #[unsafe(no_mangle)]
 pub extern "C" fn chewing_new() -> *mut ChewingContext {
     unsafe { chewing_new2(null(), null(), None, null_mut()) }
 }
 
+/// Creates a new instance of the Chewing IM.
+///
+/// The `syspath` is the directory path to system dictionary. The `userpath`
+/// is file path to user dictionary. User shall have enough permission to
+/// update this file. The logger and loggerdata is logger function and its
+/// data.
+///
+/// All parameters will be default if set to NULL.
+///
+/// The return value is a pointer to the new Chewing IM instance. See also
+/// the [chewing_new], [chewing_delete] function.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -168,11 +194,10 @@ pub unsafe extern "C" fn chewing_new2(
     let dict = Layered::new(system_dicts, user_dictionary);
     let conversion_engine = Box::new(ChewingEngine::new());
     let kb_compat = KeyboardLayoutCompat::Default;
-    let keyboard = AnyKeyboardLayout::Qwerty(Qwerty);
     let editor = Editor::new(conversion_engine, dict, estimate, abbrev, sym_sel);
     let context = Box::new(ChewingContext {
         kb_compat,
-        keyboard,
+        keymap: &QWERTY_MAP,
         editor,
         kbcompat_iter: None,
         cand_iter: None,
@@ -202,6 +227,8 @@ pub unsafe extern "C" fn chewing_new2(
     ptr
 }
 
+/// Releases the resources used by the given Chewing IM instance.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -214,6 +241,16 @@ pub unsafe extern "C" fn chewing_delete(ctx: *mut ChewingContext) {
     }
 }
 
+/// Releases the memory allocated by the Chewing IM and returned to the
+/// caller.
+///
+/// There are functions returning pointers of strings or other data
+/// structures that are allocated on the heap. These memory must be freed to
+/// avoid memory leak. To avoid memory allocator mismatch between the
+/// library and the caller, use this function to free the resources.
+///
+/// Do nothing if ptr is NULL.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -260,6 +297,12 @@ macro_rules! as_ref_or_return {
     };
 }
 
+/// Reset the context but keep all settings.
+///
+/// All preedit buffers are reset to empty.
+///
+/// The return value is 0 on success and -1 on failure.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -270,6 +313,16 @@ pub unsafe extern "C" fn chewing_Reset(ctx: *mut ChewingContext) -> c_int {
     OK
 }
 
+/// Acknowledge the commit buffer and aux output buffer.
+///
+/// Chewing automatically acknowledges and clear the output buffers after
+/// processing new input events.
+///
+/// After handling the ephemeral output buffer like the commit buffer and
+/// the aux output buffer, IM wrappers can proactively acknowledge and clear
+/// the buffers. This can be used so that IM wrappers don't have to remember
+/// whether an output has been handled or not.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -539,37 +592,31 @@ pub unsafe extern "C" fn chewing_config_set_str(
     match name.as_ref() {
         "chewing.keyboard_type" => {
             use KeyboardLayoutCompat as KB;
-            ctx.kb_compat = match string.parse() {
+            let kb_compat = match string.parse() {
                 Ok(kbtype) => kbtype,
                 Err(_) => return ERROR,
             };
-            let (keyboard, syl): (AnyKeyboardLayout, Box<dyn SyllableEditor>) = match ctx.kb_compat
-            {
-                KB::Default => (AnyKeyboardLayout::qwerty(), Box::new(Standard::new())),
-                KB::Hsu => (AnyKeyboardLayout::qwerty(), Box::new(Hsu::new())),
-                KB::Ibm => (AnyKeyboardLayout::qwerty(), Box::new(Ibm::new())),
-                KB::GinYieh => (AnyKeyboardLayout::qwerty(), Box::new(GinYieh::new())),
-                KB::Et => (AnyKeyboardLayout::qwerty(), Box::new(Et::new())),
-                KB::Et26 => (AnyKeyboardLayout::qwerty(), Box::new(Et26::new())),
-                KB::Dvorak => (AnyKeyboardLayout::qwerty(), Box::new(Standard::new())),
-                KB::DvorakHsu => (AnyKeyboardLayout::qwerty(), Box::new(Hsu::new())),
-                KB::DachenCp26 => (AnyKeyboardLayout::qwerty(), Box::new(DaiChien26::new())),
-                KB::HanyuPinyin => (AnyKeyboardLayout::qwerty(), Box::new(Pinyin::hanyu())),
-                KB::ThlPinyin => (AnyKeyboardLayout::qwerty(), Box::new(Pinyin::thl())),
-                KB::Mps2Pinyin => (AnyKeyboardLayout::qwerty(), Box::new(Pinyin::mps2())),
-                KB::Carpalx => (AnyKeyboardLayout::qwerty(), Box::new(Standard::new())),
-                KB::Colemak => (AnyKeyboardLayout::colemak(), Box::new(Standard::new())),
-                KB::ColemakDhAnsi => (
-                    AnyKeyboardLayout::colemak_dh_ansi(),
-                    Box::new(Standard::new()),
-                ),
-                KB::ColemakDhOrth => (
-                    AnyKeyboardLayout::colemak_dh_orth(),
-                    Box::new(Standard::new()),
-                ),
-                KB::Workman => (AnyKeyboardLayout::workman(), Box::new(Standard::new())),
+            let (keymap, syl): (&'static Keymap, Box<dyn SyllableEditor>) = match kb_compat {
+                KB::Default => (&QWERTY_MAP, Box::new(Standard::new())),
+                KB::Hsu => (&QWERTY_MAP, Box::new(Hsu::new())),
+                KB::Ibm => (&QWERTY_MAP, Box::new(Ibm::new())),
+                KB::GinYieh => (&QWERTY_MAP, Box::new(GinYieh::new())),
+                KB::Et => (&QWERTY_MAP, Box::new(Et::new())),
+                KB::Et26 => (&QWERTY_MAP, Box::new(Et26::new())),
+                KB::Dvorak => (&INVERTED_DVORAK_MAP, Box::new(Standard::new())),
+                KB::DvorakHsu => (&DVORAK_MAP, Box::new(Hsu::new())),
+                KB::DachenCp26 => (&QWERTY_MAP, Box::new(DaiChien26::new())),
+                KB::HanyuPinyin => (&QWERTY_MAP, Box::new(Pinyin::hanyu())),
+                KB::ThlPinyin => (&QWERTY_MAP, Box::new(Pinyin::thl())),
+                KB::Mps2Pinyin => (&QWERTY_MAP, Box::new(Pinyin::mps2())),
+                KB::Carpalx => (&QWERTY_MAP, Box::new(Standard::new())),
+                KB::Colemak => (&INVERTED_COLEMAK_MAP, Box::new(Standard::new())),
+                KB::ColemakDhAnsi => (&INVERTED_COLEMAK_DH_ANSI_MAP, Box::new(Standard::new())),
+                KB::ColemakDhOrth => (&INVERTED_COLEMAK_DH_ORTH_MAP, Box::new(Standard::new())),
+                KB::Workman => (&INVERTED_WORKMAN_MAP, Box::new(Standard::new())),
             };
-            ctx.keyboard = keyboard;
+            ctx.kb_compat = kb_compat;
+            ctx.keymap = keymap;
             ctx.editor.set_syllable_editor(syl);
         }
         "chewing.selection_keys" => {
@@ -589,6 +636,13 @@ pub unsafe extern "C" fn chewing_config_set_str(
     OK
 }
 
+/// Sets the current keyboard layout for ctx.
+///
+/// The kbtype argument must be a value defined in [KB][super::public::KB].
+///
+/// The return value is 0 on success and -1 on failure. The keyboard type
+/// will set to KB_DEFAULT if return value is -1.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -600,33 +654,27 @@ pub unsafe extern "C" fn chewing_set_KBType(ctx: *mut ChewingContext, kbtype: c_
         Ok(kb) => kb,
         Err(()) => KB::Default,
     };
-    let (keyboard, syl): (AnyKeyboardLayout, Box<dyn SyllableEditor>) = match kb_compat {
-        KB::Default => (AnyKeyboardLayout::qwerty(), Box::new(Standard::new())),
-        KB::Hsu => (AnyKeyboardLayout::qwerty(), Box::new(Hsu::new())),
-        KB::Ibm => (AnyKeyboardLayout::qwerty(), Box::new(Ibm::new())),
-        KB::GinYieh => (AnyKeyboardLayout::qwerty(), Box::new(GinYieh::new())),
-        KB::Et => (AnyKeyboardLayout::qwerty(), Box::new(Et::new())),
-        KB::Et26 => (AnyKeyboardLayout::qwerty(), Box::new(Et26::new())),
-        KB::Dvorak => (AnyKeyboardLayout::dvorak(), Box::new(Standard::new())),
-        KB::DvorakHsu => (AnyKeyboardLayout::dvorak_on_qwerty(), Box::new(Hsu::new())),
-        KB::DachenCp26 => (AnyKeyboardLayout::qwerty(), Box::new(DaiChien26::new())),
-        KB::HanyuPinyin => (AnyKeyboardLayout::qwerty(), Box::new(Pinyin::hanyu())),
-        KB::ThlPinyin => (AnyKeyboardLayout::qwerty(), Box::new(Pinyin::thl())),
-        KB::Mps2Pinyin => (AnyKeyboardLayout::qwerty(), Box::new(Pinyin::mps2())),
-        KB::Carpalx => (AnyKeyboardLayout::qwerty(), Box::new(Standard::new())),
-        KB::Colemak => (AnyKeyboardLayout::colemak(), Box::new(Standard::new())),
-        KB::ColemakDhAnsi => (
-            AnyKeyboardLayout::colemak_dh_ansi(),
-            Box::new(Standard::new()),
-        ),
-        KB::ColemakDhOrth => (
-            AnyKeyboardLayout::colemak_dh_orth(),
-            Box::new(Standard::new()),
-        ),
-        KB::Workman => (AnyKeyboardLayout::workman(), Box::new(Standard::new())),
+    let (keymap, syl): (&'static Keymap, Box<dyn SyllableEditor>) = match kb_compat {
+        KB::Default => (&QWERTY_MAP, Box::new(Standard::new())),
+        KB::Hsu => (&QWERTY_MAP, Box::new(Hsu::new())),
+        KB::Ibm => (&QWERTY_MAP, Box::new(Ibm::new())),
+        KB::GinYieh => (&QWERTY_MAP, Box::new(GinYieh::new())),
+        KB::Et => (&QWERTY_MAP, Box::new(Et::new())),
+        KB::Et26 => (&QWERTY_MAP, Box::new(Et26::new())),
+        KB::Dvorak => (&INVERTED_DVORAK_MAP, Box::new(Standard::new())),
+        KB::DvorakHsu => (&DVORAK_MAP, Box::new(Hsu::new())),
+        KB::DachenCp26 => (&QWERTY_MAP, Box::new(DaiChien26::new())),
+        KB::HanyuPinyin => (&QWERTY_MAP, Box::new(Pinyin::hanyu())),
+        KB::ThlPinyin => (&QWERTY_MAP, Box::new(Pinyin::thl())),
+        KB::Mps2Pinyin => (&QWERTY_MAP, Box::new(Pinyin::mps2())),
+        KB::Carpalx => (&QWERTY_MAP, Box::new(Standard::new())),
+        KB::Colemak => (&INVERTED_COLEMAK_MAP, Box::new(Standard::new())),
+        KB::ColemakDhAnsi => (&INVERTED_COLEMAK_DH_ANSI_MAP, Box::new(Standard::new())),
+        KB::ColemakDhOrth => (&INVERTED_COLEMAK_DH_ORTH_MAP, Box::new(Standard::new())),
+        KB::Workman => (&INVERTED_WORKMAN_MAP, Box::new(Standard::new())),
     };
     ctx.kb_compat = kb_compat;
-    ctx.keyboard = keyboard;
+    ctx.keymap = keymap;
     ctx.editor.set_syllable_editor(syl);
     if kb_compat == KB::Default && kb_compat as c_int != kbtype {
         -1
@@ -635,6 +683,10 @@ pub unsafe extern "C" fn chewing_set_KBType(ctx: *mut ChewingContext, kbtype: c_
     }
 }
 
+/// Returns the current keyboard layout index for ctx.
+///
+/// The return value is the layout index defined in [KB][super::public::KB].
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -644,6 +696,18 @@ pub unsafe extern "C" fn chewing_get_KBType(ctx: *const ChewingContext) -> c_int
     ctx.kb_compat as c_int
 }
 
+/// Returns the the current layout name string of ctx.
+///
+/// The return value is the name of the current layout, see also function
+/// [chewing_KBStr2Num].
+///
+/// The returned pointer must be freed by
+/// [chewing_free][super::setup::chewing_free].
+///
+/// # Failures
+///
+/// This function returns NULL when memory allocation fails.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -663,6 +727,34 @@ pub unsafe extern "C" fn chewing_get_KBString(ctx: *const ChewingContext) -> *mu
     )
 }
 
+/// Converts the keyboard layout name from string to corresponding layout
+/// index.
+///
+/// If the string does not match any layout, this function returns
+/// KB_DEFAULT.
+///
+/// The string str might be one of the following layouts:
+/// * KB_DEFAULT
+/// * KB_HSU
+/// * KB_IBM
+/// * KB_GIN_YIEH
+/// * KB_ET
+/// * KB_ET26
+/// * KB_DVORAK
+/// * KB_DVORAK_HSU
+/// * KB_DVORAK_CP26
+/// * KB_HANYU_PINYIN
+/// * KB_THL_PINYIN
+/// * KB_MPS2_PINYIN
+/// * KB_CARPALX
+/// * KB_COLEMAK
+/// * KB_COLEMAK_DH_ANSI
+/// * KB_COLEMAK_DH_ORTH
+/// * KB_WORKMAN
+///
+/// See also [chewing_kbtype_Enumerate] for getting the list of supported
+/// layouts programmatically.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -674,6 +766,11 @@ pub unsafe extern "C" fn chewing_KBStr2Num(str: *const c_char) -> c_int {
     layout as c_int
 }
 
+/// Sets the input mode to Chinese or English.
+///
+/// The *mode* argument is one of the [CHINESE_MODE] and [SYMBOL_MODE]
+/// constants.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -682,6 +779,8 @@ pub unsafe extern "C" fn chewing_set_ChiEngMode(ctx: *mut ChewingContext, mode: 
     unsafe { chewing_config_set_int(ctx, c"chewing.language_mode".as_ptr().cast(), mode) };
 }
 
+/// Returns the current Chinese/English mode setting.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -690,6 +789,11 @@ pub unsafe extern "C" fn chewing_get_ChiEngMode(ctx: *const ChewingContext) -> c
     unsafe { chewing_config_get_int(ctx, c"chewing.language_mode".as_ptr().cast()) }
 }
 
+/// Sets the current punctuation input mode.
+///
+/// The *mode* argument is one of the [FULLSHAPE_MODE] and [HALFSHAPE_MODE]
+/// constants.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -698,6 +802,8 @@ pub unsafe extern "C" fn chewing_set_ShapeMode(ctx: *mut ChewingContext, mode: c
     unsafe { chewing_config_set_int(ctx, c"chewing.character_form".as_ptr().cast(), mode) };
 }
 
+/// Returns the current punctuation mode.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -706,6 +812,13 @@ pub unsafe extern "C" fn chewing_get_ShapeMode(ctx: *const ChewingContext) -> c_
     unsafe { chewing_config_get_int(ctx, c"chewing.character_form".as_ptr().cast()) }
 }
 
+/// Sets the number of candidates returned per page.
+///
+/// The setting is ignored if *n* is not between [MIN_SELKEY][super::public::MIN_SELKEY] and
+/// [MAX_SELKEY][super::public::MAX_SELKEY] inclusive.
+///
+/// The default value is MAX_SELKEY.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -714,6 +827,10 @@ pub unsafe extern "C" fn chewing_set_candPerPage(ctx: *mut ChewingContext, n: c_
     unsafe { chewing_config_set_int(ctx, c"chewing.candidates_per_page".as_ptr().cast(), n) };
 }
 
+/// Gets the number of candidates returned per page.
+///
+/// The default value is MAX_SELKEY.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -722,6 +839,13 @@ pub unsafe extern "C" fn chewing_get_candPerPage(ctx: *const ChewingContext) -> 
     unsafe { chewing_config_get_int(ctx, c"chewing.candidates_per_page".as_ptr().cast()) }
 }
 
+/// Sets the maximum number of the Chinese characters allowed in the
+/// pre-edit buffer.
+///
+/// If the pre-edit string is longer than this number then the leading part
+/// will be committed automatically. The range of n shall between
+/// [MIN_CHI_SYMBOL_LEN][super::public::MIN_CHI_SYMBOL_LEN] and [MAX_CHI_SYMBOL_LEN][super::public::MAX_CHI_SYMBOL_LEN].
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -730,6 +854,9 @@ pub unsafe extern "C" fn chewing_set_maxChiSymbolLen(ctx: *mut ChewingContext, n
     unsafe { chewing_config_set_int(ctx, c"chewing.auto_commit_threshold".as_ptr().cast(), n) };
 }
 
+/// Returns the maximum number of the Chinese characters allowed in the
+/// pre-edit buffer.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -738,6 +865,13 @@ pub unsafe extern "C" fn chewing_get_maxChiSymbolLen(ctx: *const ChewingContext)
     unsafe { chewing_config_get_int(ctx, c"chewing.auto_commit_threshold".as_ptr().cast()) }
 }
 
+/// Sets the key codes for candidate selection.
+///
+/// *selkeys* is an ASCII code integer array of length [MAX_SELKEY]. The
+/// second argument is unused.
+///
+/// The default selection key is `1234567890`.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -757,6 +891,12 @@ pub unsafe extern "C" fn chewing_set_selKey(
     ctx.sel_keys.0.copy_from_slice(sel_keys);
 }
 
+/// Returns the current selection key setting.
+///
+/// The returned value is a pointer to an integer array. The memory must
+/// be freed by the caller using function
+/// [chewing_free][super::setup::chewing_free].
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -769,6 +909,11 @@ pub unsafe extern "C" fn chewing_get_selKey(ctx: *const ChewingContext) -> *mut 
     owned_into_raw(Owned::CIntSlice(len), ptr.cast())
 }
 
+/// Sets the direction to add new phrases when using CtrlNum.
+///
+/// The direction argument is 0 when the direction is backward and 1 when
+/// the direction is forward.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -786,6 +931,11 @@ pub unsafe extern "C" fn chewing_set_addPhraseDirection(
     };
 }
 
+/// Returns the direction to add new phrases when using CtrlNum.
+///
+/// The direction argument is 0 when the direction is backward and 1 when
+/// the direction is forward.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -794,6 +944,11 @@ pub unsafe extern "C" fn chewing_get_addPhraseDirection(ctx: *const ChewingConte
     unsafe { chewing_config_get_int(ctx, c"chewing.user_phrase_add_direction".as_ptr().cast()) }
 }
 
+/// Sets whether the Space key is treated as a selection key.
+///
+/// When the mode argument is 1, the Space key will initiate the candidates
+/// selection mode.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -802,6 +957,11 @@ pub unsafe extern "C" fn chewing_set_spaceAsSelection(ctx: *mut ChewingContext, 
     unsafe { chewing_config_set_int(ctx, c"chewing.space_is_select_key".as_ptr().cast(), mode) };
 }
 
+/// Returns whether the Space key is treated as a selection key.
+///
+/// Returns 1 when the Space key will initiate the candidates selection
+/// mode.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -810,6 +970,10 @@ pub unsafe extern "C" fn chewing_get_spaceAsSelection(ctx: *const ChewingContext
     unsafe { chewing_config_get_int(ctx, c"chewing.space_is_select_key".as_ptr().cast()) }
 }
 
+/// Sets whether the Esc key will flush the current pre-edit buffer.
+///
+/// When the mode argument is 1, the Esc key will flush the pre-edit buffer.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -818,6 +982,10 @@ pub unsafe extern "C" fn chewing_set_escCleanAllBuf(ctx: *mut ChewingContext, mo
     unsafe { chewing_config_set_int(ctx, c"chewing.esc_clear_all_buffer".as_ptr().cast(), mode) };
 }
 
+/// Returns whether the Esc key will flush the current pre-edit buffer.
+///
+/// Returns 1 when the Esc key will flush the pre-edit buffer.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -826,6 +994,9 @@ pub unsafe extern "C" fn chewing_get_escCleanAllBuf(ctx: *const ChewingContext) 
     unsafe { chewing_config_get_int(ctx, c"chewing.esc_clear_all_buffer".as_ptr().cast()) }
 }
 
+/// Sets whether the Chewing IM will automatically shift cursor after
+/// selection.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -834,6 +1005,9 @@ pub unsafe extern "C" fn chewing_set_autoShiftCur(ctx: *mut ChewingContext, mode
     unsafe { chewing_config_set_int(ctx, c"chewing.auto_shift_cursor".as_ptr().cast(), mode) };
 }
 
+/// Returns whether the Chewing IM will automatically shift cursor after
+/// selection.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -842,6 +1016,16 @@ pub unsafe extern "C" fn chewing_get_autoShiftCur(ctx: *const ChewingContext) ->
     unsafe { chewing_config_get_int(ctx, c"chewing.auto_shift_cursor".as_ptr().cast()) }
 }
 
+/// Sets the current normal/easy symbol mode.
+///
+/// In easy symbol mode, the key be will changed to its related easy symbol
+/// in swkb.dat. The format of swkb.dat is key symbol pair per line. The
+/// valid value of key is [0-9A-Z]. The lower case character in key will be
+/// changed to upper case when loading swkb.dat. However, in easy symbol
+/// mode, only [0-9A-Z] are accepted.
+///
+/// The mode argument is 0 for normal mode or other for easy symbol mode.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -850,6 +1034,8 @@ pub unsafe extern "C" fn chewing_set_easySymbolInput(ctx: *mut ChewingContext, m
     unsafe { chewing_config_set_int(ctx, c"chewing.easy_symbol_input".as_ptr().cast(), mode) };
 }
 
+/// Gets the current normal/easy symbol mode.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -858,6 +1044,9 @@ pub unsafe extern "C" fn chewing_get_easySymbolInput(ctx: *const ChewingContext)
     unsafe { chewing_config_get_int(ctx, c"chewing.easy_symbol_input".as_ptr().cast()) }
 }
 
+/// Sets whether the phrase for candidates selection is before the cursor or
+/// after the cursor.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -866,6 +1055,8 @@ pub unsafe extern "C" fn chewing_set_phraseChoiceRearward(ctx: *mut ChewingConte
     unsafe { chewing_config_set_int(ctx, c"chewing.phrase_choice_rearward".as_ptr().cast(), mode) };
 }
 
+/// Returns the phrase choice rearward setting.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -874,6 +1065,11 @@ pub unsafe extern "C" fn chewing_get_phraseChoiceRearward(ctx: *const ChewingCon
     unsafe { chewing_config_get_int(ctx, c"chewing.phrase_choice_rearward".as_ptr().cast()) }
 }
 
+/// Sets enable or disable the automatic learning.
+///
+/// The mode argument is be one of the [AUTOLEARN_ENABLED][super::public::AUTOLEARN_ENABLED] and
+/// [AUTOLEARN_DISABLED][super::public::AUTOLEARN_DISABLED] constants.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -888,6 +1084,8 @@ pub unsafe extern "C" fn chewing_set_autoLearn(ctx: *mut ChewingContext, mode: c
     };
 }
 
+/// Returns whether the automatic learning is enabled or disabled.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -896,6 +1094,12 @@ pub unsafe extern "C" fn chewing_get_autoLearn(ctx: *const ChewingContext) -> c_
     unsafe { chewing_config_get_int(ctx, c"chewing.disable_auto_learn_phrase".as_ptr().cast()) }
 }
 
+/// Returns the phonetic sequence in the Chewing IM internal state machine.
+///
+/// The return value is a pointer to a unsigned short array. The values in
+/// the array is encoded Bopomofo phone. The memory must be freed by the
+/// caller using function [chewing_free][super::setup::chewing_free].
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -917,6 +1121,9 @@ pub unsafe extern "C" fn chewing_get_phoneSeq(ctx: *const ChewingContext) -> *mu
     owned_into_raw(Owned::CUShortSlice(len), ptr.cast())
 }
 
+/// Returns the length of the phonetic sequence in the Chewing IM internal
+/// state machine.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -932,6 +1139,34 @@ pub unsafe extern "C" fn chewing_get_phoneSeqLen(ctx: *const ChewingContext) -> 
         .count() as c_int
 }
 
+/// Sets the external logger callback.
+///
+/// The logger function is used to provide log inside Chewing IM for debugging.
+/// The user_data pointer is passed directly to the logger when logging.
+///
+/// # Examples
+///
+/// The following example shows how to use user_data:
+///
+/// ```c
+/// void logger( void *data, int level, const char *fmt, ... )
+/// {
+///     FILE *fd = (FILE *) data;
+///     ...
+/// }
+///
+/// int main()
+/// {
+///     ChewingContext *ctx;
+///     FILE *fd;
+///     ...
+///     chewing_set_logger(ctx, logger, fd);
+///     ...
+/// }
+/// ```
+///
+/// The level is log level.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -939,18 +1174,44 @@ pub unsafe extern "C" fn chewing_get_phoneSeqLen(ctx: *const ChewingContext) -> 
 pub unsafe extern "C" fn chewing_set_logger(
     ctx: *mut ChewingContext,
     logger: Option<extern "C" fn(data: *mut c_void, level: c_int, fmt: *const c_char, ...)>,
-    data: *mut c_void,
+    user_data: *mut c_void,
 ) {
     as_mut_or_return!(ctx);
     if let Some(logger) = logger {
         log::set_max_level(log::LevelFilter::Trace);
-        LOGGER.set(Some((logger, data)));
+        LOGGER.set(Some((logger, user_data)));
     } else {
         log::set_max_level(log::LevelFilter::Off);
         LOGGER.set(None);
     }
 }
 
+/// Starts a userphrase enumeration.
+///
+/// Caller shall call this function prior [chewing_userphrase_has_next] and
+/// [chewing_userphrase_get] in order to enumerate userphrase correctly.
+///
+/// This function stores an iterator in the context. The iterator is only
+/// destroyed after enumerate all userphrases using
+/// [chewing_userphrase_has_next].
+///
+/// Returns 0 on success, -1 on failure.
+///
+/// # Examples
+///
+/// ```c
+/// chewing_userphrase_enumerate(ctx);
+/// while (chewing_userphrase_has_next(ctx, &phrase_len, &bopomofo_len)) {
+///     phrase = malloc(phrase_len);
+///     if (!phrase) goto error;
+///     bopomofo = malloc(bopomofo_len);
+///     if (!bopomofo) goto error;
+///
+///     chewing_userphrase_get(ctx, phrase, phrase_len, bopomofo, bopomofo_len);
+///     // ...
+/// }
+/// ```
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -962,6 +1223,12 @@ pub unsafe extern "C" fn chewing_userphrase_enumerate(ctx: *mut ChewingContext) 
     OK
 }
 
+/// Checks if there is another userphrase in current enumeration.
+///
+/// The *phrase_len* and *bopomofo_len* are output buffer length needed by the userphrase and its bopomofo string.
+///
+/// Returns 1 when true, 0 when false.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1002,6 +1269,14 @@ pub unsafe extern "C" fn chewing_userphrase_has_next(
     }
 }
 
+/// Gets the current enumerated userphrase.
+///
+/// The *phrase_buf* and *bopomofo_buf* are userphrase and its bopomofo
+/// buffer provided by caller. The length of the buffers can be retrived
+/// from [chewing_userphrase_has_next].
+///
+/// Returns 0 on success, -1 on failure.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1049,6 +1324,10 @@ pub unsafe extern "C" fn chewing_userphrase_get(
     }
 }
 
+/// Adds new userphrase to the user dictionary.
+///
+/// Returns how many phrases are added, -1 on failure.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1080,6 +1359,10 @@ pub unsafe extern "C" fn chewing_userphrase_add(
     }
 }
 
+/// Removes a userphrase from the user dictionary.
+///
+/// Returns how many phrases are removed, -1 on failure.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1116,6 +1399,10 @@ pub unsafe extern "C" fn chewing_userphrase_remove(
     }
 }
 
+/// Searchs if a userphrase is in the user dictionary.
+///
+/// Returns 1 when true, 0 when false.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1149,6 +1436,15 @@ pub unsafe extern "C" fn chewing_userphrase_lookup(
     }
 }
 
+/// Sets the candidate list to the first (longest) candidate list.
+///
+/// Returns 0 when success, -1 otherwise.
+///
+/// # Errors
+///
+/// This function fails if the candidate selection window is not currently
+/// open.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1164,6 +1460,15 @@ pub unsafe extern "C" fn chewing_cand_list_first(ctx: *mut ChewingContext) -> c_
     OK
 }
 
+/// Sets the candidate list to the last (shortest) candidate list.
+///
+/// Returns 0 when success, -1 otherwise.
+///
+/// # Errors
+///
+/// This function fails if the candidate selection window is not currently
+/// open.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1179,6 +1484,10 @@ pub unsafe extern "C" fn chewing_cand_list_last(ctx: *mut ChewingContext) -> c_i
     OK
 }
 
+/// Checks whether there is a next (shorter) candidate list.
+///
+/// Returns 1 (true) when there is a next candidate list, 0 otherwise.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1193,6 +1502,10 @@ pub unsafe extern "C" fn chewing_cand_list_has_next(ctx: *mut ChewingContext) ->
     ctx.editor.has_next_selection_point() as c_int
 }
 
+/// Checks whether there is a previous (longer) candidate list.
+///
+/// Returns 1 (true) when there is a previous candidate list, 0 otherwise.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1207,6 +1520,15 @@ pub unsafe extern "C" fn chewing_cand_list_has_prev(ctx: *mut ChewingContext) ->
     ctx.editor.has_prev_selection_point() as c_int
 }
 
+/// Changes current candidate list to next candidate list.
+///
+/// Returns 0 when success, -1 otherwise.
+///
+/// # Errors
+///
+/// This function fails if the candidate selection window is not currently
+/// open.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1222,6 +1544,15 @@ pub unsafe extern "C" fn chewing_cand_list_next(ctx: *mut ChewingContext) -> c_i
     }
 }
 
+/// Changes current candidate list to previous candidate list.
+///
+/// Returns 0 when success, -1 otherwise.
+///
+/// # Errors
+///
+/// This function fails if the candidate selection window is not currently
+/// open.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1237,6 +1568,14 @@ pub unsafe extern "C" fn chewing_cand_list_prev(ctx: *mut ChewingContext) -> c_i
     }
 }
 
+/// Commits the current preedit buffer content to the commit buffer.
+///
+/// Returns 0 when success, -1 otherwise.
+///
+/// # Errors
+///
+/// This function fails if the IM editor is not in entering state.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1254,6 +1593,14 @@ pub unsafe extern "C" fn chewing_commit_preedit_buf(ctx: *mut ChewingContext) ->
     }
 }
 
+/// Clears the current preedit buffer content.
+///
+/// Returns 0 when success, -1 otherwise.
+///
+/// # Errors
+///
+/// This function fails if the IM editor is not in entering state.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1269,6 +1616,14 @@ pub unsafe extern "C" fn chewing_clean_preedit_buf(ctx: *mut ChewingContext) -> 
     OK
 }
 
+/// Clears the current bopomofo buffer content.
+///
+/// Returns 0 when success, -1 otherwise.
+///
+/// # Errors
+///
+/// This function fails if the IM editor is not in entering state.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1280,6 +1635,14 @@ pub unsafe extern "C" fn chewing_clean_bopomofo_buf(ctx: *mut ChewingContext) ->
     OK
 }
 
+/// Converts the u16 encoded syllables to a bopomofo string.
+///
+/// If both of the buf and the len are 0, this function will return buf
+/// length for bopomofo including the null character so that caller can
+/// prepare enough buffer for it.
+///
+/// Returns 0 on success, -1 on failure.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1301,6 +1664,60 @@ pub unsafe extern "C" fn chewing_phone_to_bopomofo(
     (syl_str.len() + 1) as c_int
 }
 
+/// Handles all possible key events.
+///
+/// **code**
+///
+/// Code that identifies a physical key on a keyboard.
+///
+/// Keycodes are the result of the low-level processing of the data that
+/// keyboards send to a computer. For instance 36 may represent the return
+/// key.
+///
+/// Symbolic names are assigned to raw keycodes in order to facilitate
+/// their mapping to symbols. By convention keycode names are based on US
+/// QWERTY layout. For example the keycode for the return key is
+/// RETURN.
+///
+/// Chewing keycodes have same numeric encoding as X11 or xkbcommon
+/// keycodes.
+///
+/// **ksym**
+///
+/// The symbol on the cap of a key.
+///
+/// Keysyms (short for "key symbol") are translated from keycodes via a
+/// keymap. On different layout (qwerty, dvorak, etc.) all keyboards emit
+/// the same keycodes but produce different keysyms after translation.
+/// The key press / release state and state of modifier keys.
+///
+/// **state**
+///
+/// Use the state mask to read whether a modifier key is active and
+/// whether the key is pressed.
+///
+/// # Safety
+///
+/// This function should be called with valid pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn chewing_handle_KeyboardEvent(
+    ctx: *mut ChewingContext,
+    code: u8,
+    ksym: u32,
+    state: u32,
+) -> c_int {
+    let ctx = as_mut_or_return!(ctx, ERROR);
+
+    ctx.editor.process_keyevent(KeyboardEvent {
+        code: Keycode(code),
+        ksym: Keysym(ksym),
+        state,
+    });
+    OK
+}
+
+/// Handles the Space key.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1308,11 +1725,16 @@ pub unsafe extern "C" fn chewing_phone_to_bopomofo(
 pub unsafe extern "C" fn chewing_handle_Space(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
-    ctx.editor
-        .process_keyevent(ctx.keyboard.map(KeyCode::Space));
+    ctx.editor.process_keyevent(KeyboardEvent {
+        code: KEY_SPACE,
+        ksym: SYM_SPACE,
+        state: 0,
+    });
     OK
 }
 
+/// Handles the Esc key.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1320,10 +1742,16 @@ pub unsafe extern "C" fn chewing_handle_Space(ctx: *mut ChewingContext) -> c_int
 pub unsafe extern "C" fn chewing_handle_Esc(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
-    ctx.editor.process_keyevent(ctx.keyboard.map(KeyCode::Esc));
+    ctx.editor.process_keyevent(KeyboardEvent {
+        code: KEY_ESC,
+        ksym: SYM_ESC,
+        state: 0,
+    });
     OK
 }
 
+/// Handles the Enter or Return key.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1331,11 +1759,16 @@ pub unsafe extern "C" fn chewing_handle_Esc(ctx: *mut ChewingContext) -> c_int {
 pub unsafe extern "C" fn chewing_handle_Enter(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
-    ctx.editor
-        .process_keyevent(ctx.keyboard.map(KeyCode::Enter));
+    ctx.editor.process_keyevent(KeyboardEvent {
+        code: KEY_ENTER,
+        ksym: SYM_RETURN,
+        state: 0,
+    });
     OK
 }
 
+/// Handles the Delete key.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1343,10 +1776,16 @@ pub unsafe extern "C" fn chewing_handle_Enter(ctx: *mut ChewingContext) -> c_int
 pub unsafe extern "C" fn chewing_handle_Del(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
-    ctx.editor.process_keyevent(ctx.keyboard.map(KeyCode::Del));
+    ctx.editor.process_keyevent(KeyboardEvent {
+        code: KEY_DELETE,
+        ksym: SYM_DELETE,
+        state: 0,
+    });
     OK
 }
 
+/// Handles the Backspace key.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1354,11 +1793,16 @@ pub unsafe extern "C" fn chewing_handle_Del(ctx: *mut ChewingContext) -> c_int {
 pub unsafe extern "C" fn chewing_handle_Backspace(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
-    ctx.editor
-        .process_keyevent(ctx.keyboard.map(KeyCode::Backspace));
+    ctx.editor.process_keyevent(KeyboardEvent {
+        code: KEY_BACKSPACE,
+        ksym: SYM_BACKSPACE,
+        state: 0,
+    });
     OK
 }
 
+/// Handles the Tab key.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1366,10 +1810,16 @@ pub unsafe extern "C" fn chewing_handle_Backspace(ctx: *mut ChewingContext) -> c
 pub unsafe extern "C" fn chewing_handle_Tab(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
-    ctx.editor.process_keyevent(ctx.keyboard.map(KeyCode::Tab));
+    ctx.editor.process_keyevent(KeyboardEvent {
+        code: KEY_TAB,
+        ksym: SYM_TAB,
+        state: 0,
+    });
     OK
 }
 
+/// Handles the Left key with the Shift modifier.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1377,11 +1827,16 @@ pub unsafe extern "C" fn chewing_handle_Tab(ctx: *mut ChewingContext) -> c_int {
 pub unsafe extern "C" fn chewing_handle_ShiftLeft(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
-    ctx.editor
-        .process_keyevent(ctx.keyboard.map_with_mod(KeyCode::Left, Modifiers::shift()));
+    ctx.editor.process_keyevent(KeyboardEvent {
+        code: KEY_LEFT,
+        ksym: SYM_LEFT,
+        state: KeyboardEvent::SHIFT_MASK,
+    });
     OK
 }
 
+/// Handles the Left key.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1389,11 +1844,16 @@ pub unsafe extern "C" fn chewing_handle_ShiftLeft(ctx: *mut ChewingContext) -> c
 pub unsafe extern "C" fn chewing_handle_Left(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
-    let key_event = ctx.keyboard.map(KeyCode::Left);
-    ctx.editor.process_keyevent(key_event);
+    ctx.editor.process_keyevent(KeyboardEvent {
+        code: KEY_LEFT,
+        ksym: SYM_LEFT,
+        state: 0,
+    });
     OK
 }
 
+/// Handles the Right key with the Shift modifier.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1401,13 +1861,16 @@ pub unsafe extern "C" fn chewing_handle_Left(ctx: *mut ChewingContext) -> c_int 
 pub unsafe extern "C" fn chewing_handle_ShiftRight(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
-    ctx.editor.process_keyevent(
-        ctx.keyboard
-            .map_with_mod(KeyCode::Right, Modifiers::shift()),
-    );
+    ctx.editor.process_keyevent(KeyboardEvent {
+        code: KEY_RIGHT,
+        ksym: SYM_RIGHT,
+        state: KeyboardEvent::SHIFT_MASK,
+    });
     OK
 }
 
+/// Handles the Right key.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1415,11 +1878,19 @@ pub unsafe extern "C" fn chewing_handle_ShiftRight(ctx: *mut ChewingContext) -> 
 pub unsafe extern "C" fn chewing_handle_Right(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
-    ctx.editor
-        .process_keyevent(ctx.keyboard.map(KeyCode::Right));
+    ctx.editor.process_keyevent(KeyboardEvent {
+        code: KEY_RIGHT,
+        ksym: SYM_RIGHT,
+        state: 0,
+    });
     OK
 }
 
+/// Handles the Up key.
+///
+/// See also [chewing_cand_close][super::candidates::chewing_cand_close] keyboardless API to close candidate
+/// window.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1427,10 +1898,16 @@ pub unsafe extern "C" fn chewing_handle_Right(ctx: *mut ChewingContext) -> c_int
 pub unsafe extern "C" fn chewing_handle_Up(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
-    ctx.editor.process_keyevent(ctx.keyboard.map(KeyCode::Up));
+    ctx.editor.process_keyevent(KeyboardEvent {
+        code: KEY_UP,
+        ksym: SYM_UP,
+        state: 0,
+    });
     OK
 }
 
+/// Handles the Home key.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1438,10 +1915,16 @@ pub unsafe extern "C" fn chewing_handle_Up(ctx: *mut ChewingContext) -> c_int {
 pub unsafe extern "C" fn chewing_handle_Home(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
-    ctx.editor.process_keyevent(ctx.keyboard.map(KeyCode::Home));
+    ctx.editor.process_keyevent(KeyboardEvent {
+        code: KEY_HOME,
+        ksym: SYM_HOME,
+        state: 0,
+    });
     OK
 }
 
+/// Handles the End key.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1449,10 +1932,16 @@ pub unsafe extern "C" fn chewing_handle_Home(ctx: *mut ChewingContext) -> c_int 
 pub unsafe extern "C" fn chewing_handle_End(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
-    ctx.editor.process_keyevent(ctx.keyboard.map(KeyCode::End));
+    ctx.editor.process_keyevent(KeyboardEvent {
+        code: KEY_END,
+        ksym: SYM_END,
+        state: 0,
+    });
     OK
 }
 
+/// Handles the PageUp key.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1460,11 +1949,16 @@ pub unsafe extern "C" fn chewing_handle_End(ctx: *mut ChewingContext) -> c_int {
 pub unsafe extern "C" fn chewing_handle_PageUp(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
-    ctx.editor
-        .process_keyevent(ctx.keyboard.map(KeyCode::PageUp));
+    ctx.editor.process_keyevent(KeyboardEvent {
+        code: KEY_PAGEUP,
+        ksym: SYM_PAGEUP,
+        state: 0,
+    });
     OK
 }
 
+/// Handles the PageDown key.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1472,11 +1966,18 @@ pub unsafe extern "C" fn chewing_handle_PageUp(ctx: *mut ChewingContext) -> c_in
 pub unsafe extern "C" fn chewing_handle_PageDown(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
-    ctx.editor
-        .process_keyevent(ctx.keyboard.map(KeyCode::PageDown));
+    ctx.editor.process_keyevent(KeyboardEvent {
+        code: KEY_PAGEDOWN,
+        ksym: SYM_PAGEDOWN,
+        state: 0,
+    });
     OK
 }
 
+/// Handles the Down key.
+///
+/// See also [super::io::chewing_cand_open] keyboardless API to open candidate window.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1484,10 +1985,16 @@ pub unsafe extern "C" fn chewing_handle_PageDown(ctx: *mut ChewingContext) -> c_
 pub unsafe extern "C" fn chewing_handle_Down(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
-    ctx.editor.process_keyevent(ctx.keyboard.map(KeyCode::Down));
+    ctx.editor.process_keyevent(KeyboardEvent {
+        code: KEY_DOWN,
+        ksym: SYM_DOWN,
+        state: 0,
+    });
     OK
 }
 
+/// Handles the Capslock key.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1495,13 +2002,18 @@ pub unsafe extern "C" fn chewing_handle_Down(ctx: *mut ChewingContext) -> c_int 
 pub unsafe extern "C" fn chewing_handle_Capslock(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
-    ctx.editor.process_keyevent(
-        ctx.keyboard
-            .map_with_mod(KeyCode::Unknown, Modifiers::capslock()),
-    );
+    ctx.editor.process_keyevent(KeyboardEvent {
+        code: KEY_CAPSLOCK,
+        ksym: SYM_CAPSLOCK,
+        state: KeyboardEvent::CAPSLOCK_MASK,
+    });
     OK
 }
 
+/// Handles all keys that do not have dedicated methods.
+///
+/// The value of of key can be any printable ASCII characters.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1534,11 +2046,16 @@ pub unsafe extern "C" fn chewing_handle_Default(ctx: *mut ChewingContext, key: c
         key
     };
 
-    ctx.editor
-        .process_keyevent(ctx.keyboard.map_ascii(key as u8));
-    OK
+    let evt = map_ascii(&ctx.keymap, key as u8);
+
+    unsafe { chewing_handle_KeyboardEvent(ctx, evt.code.0, evt.ksym.0, evt.state) }
 }
 
+/// Handles any number key with the Ctrl modifier.
+///
+/// The value of key should be in the range between ASCII character code
+/// from 0 to 9.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1546,25 +2063,30 @@ pub unsafe extern "C" fn chewing_handle_Default(ctx: *mut ChewingContext, key: c
 pub unsafe extern "C" fn chewing_handle_CtrlNum(ctx: *mut ChewingContext, key: c_int) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
-    let keycode = match key as u8 {
-        b'0' => KeyCode::N0,
-        b'1' => KeyCode::N1,
-        b'2' => KeyCode::N2,
-        b'3' => KeyCode::N3,
-        b'4' => KeyCode::N4,
-        b'5' => KeyCode::N5,
-        b'6' => KeyCode::N6,
-        b'7' => KeyCode::N7,
-        b'8' => KeyCode::N8,
-        b'9' => KeyCode::N9,
+    let (code, ksym) = match key as u8 {
+        b'0' => (KEY_0, SYM_0),
+        b'1' => (KEY_1, SYM_1),
+        b'2' => (KEY_2, SYM_2),
+        b'3' => (KEY_3, SYM_3),
+        b'4' => (KEY_4, SYM_4),
+        b'5' => (KEY_5, SYM_5),
+        b'6' => (KEY_6, SYM_6),
+        b'7' => (KEY_7, SYM_7),
+        b'8' => (KEY_8, SYM_8),
+        b'9' => (KEY_9, SYM_9),
         _ => return -1,
     };
 
-    ctx.editor
-        .process_keyevent(ctx.keyboard.map_with_mod(keycode, Modifiers::control()));
+    ctx.editor.process_keyevent(KeyboardEvent {
+        code,
+        ksym,
+        state: KeyboardEvent::CONTROL_MASK,
+    });
     OK
 }
 
+/// Handles the Space key with the Shift modifier.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1572,13 +2094,16 @@ pub unsafe extern "C" fn chewing_handle_CtrlNum(ctx: *mut ChewingContext, key: c
 pub unsafe extern "C" fn chewing_handle_ShiftSpace(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
-    ctx.editor.process_keyevent(
-        ctx.keyboard
-            .map_with_mod(KeyCode::Space, Modifiers::shift()),
-    );
+    ctx.editor.process_keyevent(KeyboardEvent {
+        code: KEY_SPACE,
+        ksym: SYM_SPACE,
+        state: KeyboardEvent::SHIFT_MASK,
+    });
     OK
 }
 
+/// Handles tapping the Tab key twice quickly.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1590,6 +2115,11 @@ pub unsafe extern "C" fn chewing_handle_DblTab(ctx: *mut ChewingContext) -> c_in
     OK
 }
 
+/// Handles any numeric key from the keypad.
+///
+/// The value of key should be in the range between ASCII character code
+/// from 0 to 9.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1597,11 +2127,37 @@ pub unsafe extern "C" fn chewing_handle_DblTab(ctx: *mut ChewingContext) -> c_in
 pub unsafe extern "C" fn chewing_handle_Numlock(ctx: *mut ChewingContext, key: c_int) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
-    ctx.editor
-        .process_keyevent(ctx.keyboard.map_ascii_numlock(key as u8));
+    let (code, ksym) = match key as u8 {
+        b'0' => (KEY_KP0, SYM_KP0),
+        b'1' => (KEY_KP1, SYM_KP1),
+        b'2' => (KEY_KP2, SYM_KP2),
+        b'3' => (KEY_KP3, SYM_KP3),
+        b'4' => (KEY_KP4, SYM_KP4),
+        b'5' => (KEY_KP5, SYM_KP5),
+        b'6' => (KEY_KP6, SYM_KP6),
+        b'7' => (KEY_KP7, SYM_KP7),
+        b'8' => (KEY_KP8, SYM_KP8),
+        b'9' => (KEY_KP9, SYM_KP9),
+        b'+' => (KEY_KPPLUS, SYM_KPADD),
+        b'-' => (KEY_KPMINUS, SYM_KPSUBTRACT),
+        b'*' => (KEY_KPASTERISK, SYM_KPMULTIPLY),
+        b'/' => (KEY_KPSLASH, SYM_KPDIVIDE),
+        b'.' => (KEY_KPDOT, SYM_KPDECIMAL),
+        _ => return -1,
+    };
+
+    ctx.editor.process_keyevent(KeyboardEvent {
+        code,
+        ksym,
+        state: KeyboardEvent::NUMLOCK_MASK,
+    });
     OK
 }
 
+/// Checks whether the commit buffer has something to read.
+///
+/// Returns 1 when true, 0 when false.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1612,6 +2168,16 @@ pub unsafe extern "C" fn chewing_commit_Check(ctx: *const ChewingContext) -> c_i
     !ctx.editor.display_commit().is_empty() as c_int
 }
 
+/// Returns the string in the commit buffer.
+///
+/// The returned value is a pointer to a character string. The memory must
+/// be freed by the caller using function
+/// [chewing_free][super::setup::chewing_free].
+///
+/// # Failures
+///
+/// This function returns NULL when memory allocation fails.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1630,6 +2196,12 @@ pub unsafe extern "C" fn chewing_commit_String(ctx: *const ChewingContext) -> *m
     owned_into_raw(Owned::CString, cstr.into_raw())
 }
 
+/// Returns the string in the commit buffer.
+///
+/// The return value is a const pointer to a character string. The pointer
+/// is only valid immediately after checking the [chewing_commit_Check]
+/// condition.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1640,6 +2212,16 @@ pub unsafe extern "C" fn chewing_commit_String_static(ctx: *const ChewingContext
     copy_cstr(&mut ctx.commit_buf, ctx.editor.display_commit())
 }
 
+/// Returns the current output in the pre-edit buffer.
+///
+/// The returned value is a pointer to a character string. The memory must
+/// be freed by the caller using function
+/// [chewing_free][super::setup::chewing_free].
+///
+/// # Failures
+///
+/// This function returns NULL when memory allocation fails.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1658,6 +2240,12 @@ pub unsafe extern "C" fn chewing_buffer_String(ctx: *const ChewingContext) -> *m
     owned_into_raw(Owned::CString, cstr.into_raw())
 }
 
+/// Returns the current output in the pre-edit buffer.
+///
+/// The return value is a const pointer to a character string. The pointer
+/// is only valid immediately after checking the [chewing_buffer_Check]
+/// condition.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1668,6 +2256,10 @@ pub unsafe extern "C" fn chewing_buffer_String_static(ctx: *const ChewingContext
     copy_cstr(&mut ctx.preedit_buf, &ctx.editor.display())
 }
 
+/// Checks whether there is output in the pre-edit buffer.
+///
+/// Returns 1 when true, 0 when false.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1678,6 +2270,13 @@ pub unsafe extern "C" fn chewing_buffer_Check(ctx: *const ChewingContext) -> c_i
     !ctx.editor.is_empty() as c_int
 }
 
+/// Returns the length of the string in current pre-edit buffer.
+///
+/// <p style="background:rgba(255,181,77,0.16);padding:0.75em;">
+/// <strong>⚠ Warning:</strong> The length is calculated in terms of
+/// unicode characters. One character might occupy multiple bytes.
+/// </p>
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1688,6 +2287,12 @@ pub unsafe extern "C" fn chewing_buffer_Len(ctx: *const ChewingContext) -> c_int
     ctx.editor.len() as c_int
 }
 
+/// Returns the phonetic characters in the pre-edit buffer.
+///
+/// The return value is a const pointer to a character string. The pointer
+/// is only valid immediately after checking the [chewing_bopomofo_Check]
+/// condition.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1700,6 +2305,16 @@ pub unsafe extern "C" fn chewing_bopomofo_String_static(
     copy_cstr(&mut ctx.bopomofo_buf, &ctx.editor.syllable_buffer_display())
 }
 
+/// Returns the phonetic characters in the pre-edit buffer.
+///
+/// The returned value is a pointer to a character string. The memory must
+/// be freed by the caller using function
+/// [chewing_free][super::setup::chewing_free].
+///
+/// # Failures
+///
+/// This function returns NULL when memory allocation fails.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1718,6 +2333,10 @@ pub unsafe extern "C" fn chewing_bopomofo_String(ctx: *const ChewingContext) -> 
     owned_into_raw(Owned::CString, cstr.into_raw())
 }
 
+/// Returns whether there are phonetic pre-edit string in the buffer.
+///
+/// Returns 1 when true, 0 when false.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1728,6 +2347,8 @@ pub unsafe extern "C" fn chewing_bopomofo_Check(ctx: *const ChewingContext) -> c
     ctx.editor.entering_syllable() as c_int
 }
 
+/// Returns the current cursor position in the pre-edit buffer.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1738,11 +2359,17 @@ pub unsafe extern "C" fn chewing_cursor_Current(ctx: *const ChewingContext) -> c
     ctx.editor.cursor() as c_int
 }
 
-#[deprecated(note = "The chewing_cand_TotalPage function could achieve the same effect.")]
+/// Checks if the candidates selection has finished.
+///
+/// <p style="background:rgba(255,181,77,0.16);padding:0.75em;">
+/// <strong>⚠ Warning:</strong> Not implemented.
+/// </p>
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
 #[unsafe(no_mangle)]
+#[deprecated(note = "The chewing_cand_TotalPage function could achieve the same effect.")]
 pub unsafe extern "C" fn chewing_cand_CheckDone(ctx: *const ChewingContext) -> c_int {
     let ctx = as_ref_or_return!(ctx, ERROR);
 
@@ -1753,6 +2380,12 @@ pub unsafe extern "C" fn chewing_cand_CheckDone(ctx: *const ChewingContext) -> c
     }
 }
 
+/// Returns the number of pages of the candidates.
+///
+/// If the return value is greater than zero, then the IM interface should
+/// display a selection window of the candidates for the user to choose a
+/// candidate. Otherwise hide the selection window.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1763,6 +2396,10 @@ pub unsafe extern "C" fn chewing_cand_TotalPage(ctx: *const ChewingContext) -> c
     ctx.editor.total_page().unwrap_or_default() as c_int
 }
 
+/// Returns the number of the coices per page.
+///
+/// See also the [chewing_set_candPerPage] function.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1773,6 +2410,8 @@ pub unsafe extern "C" fn chewing_cand_ChoicePerPage(ctx: *const ChewingContext) 
     ctx.editor.editor_options().candidates_per_page as c_int
 }
 
+/// Returns the total number of the available choices.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1786,6 +2425,18 @@ pub unsafe extern "C" fn chewing_cand_TotalChoice(ctx: *const ChewingContext) ->
     }
 }
 
+/// Returns the current candidate page number.
+///
+/// # Examples
+///
+/// The candidates pagination could be displayed as:
+///
+/// ```c
+/// sprintf(buf, "[%d / %d]",
+///     chewing_cand_CurrentPage(ctx),
+///     chewing_cand_TotalPage(ctx));
+/// ```
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1796,6 +2447,13 @@ pub unsafe extern "C" fn chewing_cand_CurrentPage(ctx: *const ChewingContext) ->
     ctx.editor.current_page_no().unwrap_or_default() as c_int
 }
 
+/// Starts the enumeration of the candidates starting from the first one in
+/// the current page.
+///
+/// This function stores an iterator in the context. The iterator is only
+/// destroyed after enumerate candidates using
+/// [chewing_cand_hasNext].
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1810,6 +2468,13 @@ pub unsafe extern "C" fn chewing_cand_Enumerate(ctx: *mut ChewingContext) {
     }
 }
 
+/// Checks if there are more candidates to enumerate.
+///
+/// <p style="background:rgba(255,181,77,0.16);padding:0.75em;">
+/// <strong>⚠ Warning:</strong> This function checks the end of total choices
+/// instead of the end of current page.
+/// </p>
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1827,6 +2492,16 @@ pub unsafe extern "C" fn chewing_cand_hasNext(ctx: *mut ChewingContext) -> c_int
         .map_or(0, |_| 1)
 }
 
+/// Returns the current enumerated candidate string.
+///
+/// The returned value is a pointer to a character string. The memory must
+/// be freed by the caller using function
+/// [chewing_free][super::setup::chewing_free].
+///
+/// # Failures
+///
+/// This function returns NULL when memory allocation fails.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1849,6 +2524,14 @@ pub unsafe extern "C" fn chewing_cand_String(ctx: *mut ChewingContext) -> *mut c
     }
 }
 
+/// Returns the current enumerated candidate string.
+///
+/// The returned string is emtpy string when enumeration is over.
+///
+/// The return value is a const pointer to a character string. The pointer
+/// is only valid immediately after checking the [chewing_cand_hasNext]
+/// condition.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1862,6 +2545,18 @@ pub unsafe extern "C" fn chewing_cand_String_static(ctx: *mut ChewingContext) ->
     }
 }
 
+/// Returns the candidate string by its index.
+///
+/// The *index* must be between 0 and [chewing_cand_TotalChoice] inclusive.
+///
+/// The returned value is a pointer to a character string. The memory must
+/// be freed by the caller using function
+/// [chewing_free][super::setup::chewing_free].
+///
+/// # Failures
+///
+/// This function returns NULL when memory allocation fails.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1888,6 +2583,13 @@ pub unsafe extern "C" fn chewing_cand_string_by_index(
     owned_into_raw(Owned::CString, CString::default().into_raw())
 }
 
+/// Returns the candidate string by its index.
+///
+/// The *index* must be between 0 and [chewing_cand_TotalChoice] inclusive.
+///
+/// The return value is a const pointer to a character string. The pointer
+/// is only valid immediately after calling this function.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1906,6 +2608,17 @@ pub unsafe extern "C" fn chewing_cand_string_by_index_static(
     global_empty_cstr()
 }
 
+/// Selects the candidate by its index.
+///
+/// The *index* must be between 0 and [chewing_cand_TotalChoice] inclusive.
+///
+/// Returns 0 when success, -1 otherwise.
+///
+/// # Errors
+///
+/// This function fails if the *index* is out of range or the candidate
+/// selection window is not currently open.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1922,6 +2635,12 @@ pub unsafe extern "C" fn chewing_cand_choose_by_index(
     }
 }
 
+/// Opens the candidate selection window.
+///
+/// This operation is only allowed when the IM editor is in entering state.
+///
+/// Returns 0 when success, -1 otherwise.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1935,6 +2654,10 @@ pub unsafe extern "C" fn chewing_cand_open(ctx: *mut ChewingContext) -> c_int {
     }
 }
 
+/// Closes the candidate selection window.
+///
+/// Returns 0 when success, -1 otherwise.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1949,6 +2672,12 @@ pub unsafe extern "C" fn chewing_cand_close(ctx: *mut ChewingContext) -> c_int {
     }
 }
 
+/// Starts the enumeration of intervals of recognized phrases.
+///
+/// This function stores an iterator in the context. The iterator is only
+/// destroyed after enumerate all intervals using
+/// [chewing_interval_hasNext].
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1963,6 +2692,10 @@ pub unsafe extern "C" fn chewing_interval_Enumerate(ctx: *mut ChewingContext) {
     );
 }
 
+/// Checks whether there are more intervals or not.
+///
+/// Returns 1 when true, 0 when false.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1978,6 +2711,10 @@ pub unsafe extern "C" fn chewing_interval_hasNext(ctx: *mut ChewingContext) -> c
         })
 }
 
+/// Returns the current enumerated interval.
+///
+/// The *it* argument is an output argument.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -1999,6 +2736,10 @@ pub unsafe extern "C" fn chewing_interval_Get(ctx: *mut ChewingContext, it: *mut
     }
 }
 
+/// Returns whether there is auxiliary string in the auxiliary buffer.
+///
+/// Returns 1 when true, 0 when false.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -2009,6 +2750,13 @@ pub unsafe extern "C" fn chewing_aux_Check(ctx: *const ChewingContext) -> c_int 
     !ctx.editor.notification().is_empty() as c_int
 }
 
+/// Returns the length of the auxiliary string in the auxiliary buffer.
+///
+/// <p style="background:rgba(255,181,77,0.16);padding:0.75em;">
+/// <strong>⚠ Warning:</strong> The length is calculated in terms of
+/// unicode characters. One character might occupy multiple bytes.
+/// </p>
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -2019,6 +2767,16 @@ pub unsafe extern "C" fn chewing_aux_Length(ctx: *const ChewingContext) -> c_int
     ctx.editor.notification().chars().count() as c_int
 }
 
+/// Returns the current auxiliary string.
+///
+/// The returned value is a pointer to a character string. The memory must
+/// be freed by the caller using function
+/// [chewing_free][super::setup::chewing_free].
+///
+/// # Failures
+///
+/// This function returns NULL when memory allocation fails.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -2034,6 +2792,12 @@ pub unsafe extern "C" fn chewing_aux_String(ctx: *const ChewingContext) -> *mut 
     owned_into_raw(Owned::CString, cstring.into_raw())
 }
 
+/// Returns the current auxiliary string.
+///
+/// The return value is a const pointer to a character string. The pointer
+/// is only valid immediately after checking the [chewing_aux_Check]
+/// condition.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -2044,6 +2808,10 @@ pub unsafe extern "C" fn chewing_aux_String_static(ctx: *const ChewingContext) -
     copy_cstr(&mut ctx.aux_buf, ctx.editor.notification())
 }
 
+/// Checks whether the previous keystroke is ignored or not.
+///
+/// Returns 1 when true, 0 when false.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -2057,6 +2825,14 @@ pub unsafe extern "C" fn chewing_keystroke_CheckIgnore(ctx: *const ChewingContex
     }
 }
 
+/// Checks whether the previous keystroke is absorbed or not.
+///
+/// Returns 1 when true, 0 when false.
+///
+/// Absorbed key means the Chewing IM state machine has accepted the key and
+/// changed its state accordingly. Caller should check various output
+/// buffers to see if they need to update the display.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -2073,6 +2849,8 @@ pub unsafe extern "C" fn chewing_keystroke_CheckAbsorb(ctx: *const ChewingContex
     }
 }
 
+/// Returns the number of keyboard layouts supported by the Chewing IM.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -2083,6 +2861,12 @@ pub unsafe extern "C" fn chewing_kbtype_Total(_ctx: *const ChewingContext) -> c_
         .count() as c_int
 }
 
+/// Starts the enumeration of the keyboard layouts.
+///
+/// This function stores an iterator in the context. The iterator is only
+/// destroyed after enumerate all keyboard layouts using
+/// [chewing_kbtype_hasNext].
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -2097,6 +2881,10 @@ pub unsafe extern "C" fn chewing_kbtype_Enumerate(ctx: *mut ChewingContext) {
     )
 }
 
+/// Checks whether there are more keyboard layouts to enumerate.
+///
+/// Returns 1 when there are more and 0 when it's the end of the iterator.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -2110,6 +2898,18 @@ pub unsafe extern "C" fn chewing_kbtype_hasNext(ctx: *mut ChewingContext) -> c_i
         .map_or(0, |_| 1)
 }
 
+/// Returns the current enumerated keyboard layout name.
+///
+/// The returned string is emtpy string when enumeration is over.
+///
+/// The returned value is a pointer to a character string. The memory must
+/// be freed by the caller using function
+/// [chewing_free][super::setup::chewing_free].
+///
+/// # Failures
+///
+/// This function returns NULL when memory allocation fails.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -2132,6 +2932,14 @@ pub unsafe extern "C" fn chewing_kbtype_String(ctx: *mut ChewingContext) -> *mut
     }
 }
 
+/// Returns the current enumerated keyboard layout name.
+///
+/// The returned string is emtpy string when enumeration is over.
+///
+/// The return value is a const pointer to a character string. The pointer
+/// is only valid immediately after checking the [chewing_kbtype_hasNext]
+/// condition.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -2145,6 +2953,17 @@ pub unsafe extern "C" fn chewing_kbtype_String_static(ctx: *mut ChewingContext) 
     }
 }
 
+/// Returns whether there are phonetic pre-edit string in the buffer. Here
+/// “zuin” means bopomofo, a phonetic system for transcribing Chinese,
+/// especially Mandarin.
+///
+/// Returns **0** when true, **1** when false.
+///
+/// <p style="background:rgba(255,181,77,0.16);padding:0.75em;">
+/// <strong>⚠ Warning:</strong> The return value of this function is
+/// different from other newer functions that returns boolean value.
+/// </p>
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -2154,6 +2973,19 @@ pub unsafe extern "C" fn chewing_zuin_Check(ctx: *const ChewingContext) -> c_int
     unsafe { chewing_bopomofo_Check(ctx) ^ 1 }
 }
 
+/// Returns the phonetic characters in the pre-edit buffer.
+///
+/// The bopomofo_count argument is a output argument. It will contain the
+/// number of phonetic characters in the returned string.
+///
+/// The returned value is a pointer to a character string. The memory must
+/// be freed by the caller using function
+/// [chewing_free][super::setup::chewing_free].
+///
+/// # Failures
+///
+/// This function returns NULL when memory allocation fails.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -2179,9 +3011,9 @@ pub unsafe extern "C" fn chewing_zuin_String(
     owned_into_raw(Owned::CString, cstr.into_raw())
 }
 
-/// # Safety
+/// This function exists only for backword compatibility.
 ///
-/// This function should be called with valid pointers.
+/// The `chewing_Init` function is no-op now. The return value is always 0.
 #[unsafe(no_mangle)]
 #[deprecated]
 pub unsafe extern "C" fn chewing_Init(data_path: *const c_char, hash_path: *const c_char) -> c_int {
@@ -2190,13 +3022,21 @@ pub unsafe extern "C" fn chewing_Init(data_path: *const c_char, hash_path: *cons
     OK
 }
 
-/// # Safety
-///
-/// This function should be called with valid pointers.
+/// This function exists only for backword compatibility.
 #[unsafe(no_mangle)]
 #[deprecated]
 pub unsafe extern "C" fn chewing_Terminate() {}
 
+/// Sets the selectAreaLen, maxChiSymbolLen and selKey parameter from pcd.
+///
+/// The pcd argument is a pointer to a Chewing configuration data structure.
+/// See also the ChewingConfigData data type.
+///
+/// The return value is 0 on success and -1 on failure.
+///
+/// **Deprecated**, use the chewing_set_* function series to set parameters
+/// instead.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -2225,6 +3065,8 @@ pub unsafe extern "C" fn chewing_Configure(
     OK
 }
 
+/// This function is no-op now. Use [chewing_set_selKey] instead.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.
@@ -2234,6 +3076,8 @@ pub unsafe extern "C" fn chewing_set_hsuSelKeyType(_ctx: *mut ChewingContext, mo
     let _ = mode;
 }
 
+/// This function is no-op now. Use [chewing_get_selKey] instead.
+///
 /// # Safety
 ///
 /// This function should be called with valid pointers.

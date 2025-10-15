@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024
+ * Copyright (c) 2025
  *      libchewing Core Team.
  *
  * See the file "COPYING" for information on usage and redistribution
@@ -17,10 +17,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
-
-/** @brief context handle used for Chewing IM APIs
- */
-typedef struct ChewingContext ChewingContext;
 
 /** @brief indicate the internal encoding of data processing.
  *  @since 0.3.0
@@ -150,9 +146,44 @@ typedef struct ChewingContext ChewingContext;
 
 #define CHEWING_VERSION_MAJOR 0
 
-#define CHEWING_VERSION_MINOR 9
+#define CHEWING_VERSION_MINOR 10
 
-#define CHEWING_VERSION_PATCH 1
+#define CHEWING_VERSION_PATCH 3
+
+/**
+ * Shift is activated.
+ */
+#define KeyboardEvent_SHIFT_MASK (1 << 0)
+
+/**
+ * Caps Lock is activated.
+ */
+#define KeyboardEvent_CAPSLOCK_MASK (1 << 1)
+
+/**
+ * Control is activated.
+ */
+#define KeyboardEvent_CONTROL_MASK (1 << 2)
+
+/**
+ * Alt or Meta is activated.
+ */
+#define KeyboardEvent_ALT_MASK (1 << 3)
+
+/**
+ * Num Lock is activated.
+ */
+#define KeyboardEvent_NUMLOCK_MASK (1 << 4)
+
+/**
+ * Super is activated.
+ */
+#define KeyboardEvent_SUPER_MASK (1 << 6)
+
+/**
+ * Key is released.
+ */
+#define KeyboardEvent_RELEASE_MASK (1 << 30)
 
 /**
  * Keyboard layout index.
@@ -222,9 +253,28 @@ typedef struct ChewingConfigData {
 extern "C" {
 #endif // __cplusplus
 
+/**
+ * Creates a new instance of the Chewing IM.
+ *
+ * The return value is a pointer to the new Chewing IM instance.
+ *
+ * See also the [chewing_new2], and [chewing_delete] functions.
+ */
 struct ChewingContext *chewing_new(void);
 
 /**
+ * Creates a new instance of the Chewing IM.
+ *
+ * The `syspath` is the directory path to system dictionary. The `userpath`
+ * is file path to user dictionary. User shall have enough permission to
+ * update this file. The logger and loggerdata is logger function and its
+ * data.
+ *
+ * All parameters will be default if set to NULL.
+ *
+ * The return value is a pointer to the new Chewing IM instance. See also
+ * the [chewing_new], [chewing_delete] function.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -235,6 +285,8 @@ struct ChewingContext *chewing_new2(const char *syspath,
                                     void *loggerdata);
 
 /**
+ * Releases the resources used by the given Chewing IM instance.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -242,6 +294,16 @@ struct ChewingContext *chewing_new2(const char *syspath,
 void chewing_delete(struct ChewingContext *ctx);
 
 /**
+ * Releases the memory allocated by the Chewing IM and returned to the
+ * caller.
+ *
+ * There are functions returning pointers of strings or other data
+ * structures that are allocated on the heap. These memory must be freed to
+ * avoid memory leak. To avoid memory allocator mismatch between the
+ * library and the caller, use this function to free the resources.
+ *
+ * Do nothing if ptr is NULL.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -249,6 +311,12 @@ void chewing_delete(struct ChewingContext *ctx);
 void chewing_free(void *ptr);
 
 /**
+ * Reset the context but keep all settings.
+ *
+ * All preedit buffers are reset to empty.
+ *
+ * The return value is 0 on success and -1 on failure.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -256,6 +324,16 @@ void chewing_free(void *ptr);
 int chewing_Reset(struct ChewingContext *ctx);
 
 /**
+ * Acknowledge the commit buffer and aux output buffer.
+ *
+ * Chewing automatically acknowledges and clear the output buffers after
+ * processing new input events.
+ *
+ * After handling the ephemeral output buffer like the commit buffer and
+ * the aux output buffer, IM wrappers can proactively acknowledge and clear
+ * the buffers. This can be used so that IM wrappers don't have to remember
+ * whether an output has been handled or not.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -298,6 +376,13 @@ int chewing_config_get_str(const struct ChewingContext *ctx, const char *name, c
 int chewing_config_set_str(struct ChewingContext *ctx, const char *name, const char *value);
 
 /**
+ * Sets the current keyboard layout for ctx.
+ *
+ * The kbtype argument must be a value defined in [KB][super::public::KB].
+ *
+ * The return value is 0 on success and -1 on failure. The keyboard type
+ * will set to KB_DEFAULT if return value is -1.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -305,6 +390,10 @@ int chewing_config_set_str(struct ChewingContext *ctx, const char *name, const c
 int chewing_set_KBType(struct ChewingContext *ctx, int kbtype);
 
 /**
+ * Returns the current keyboard layout index for ctx.
+ *
+ * The return value is the layout index defined in [KB][super::public::KB].
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -312,6 +401,18 @@ int chewing_set_KBType(struct ChewingContext *ctx, int kbtype);
 int chewing_get_KBType(const struct ChewingContext *ctx);
 
 /**
+ * Returns the the current layout name string of ctx.
+ *
+ * The return value is the name of the current layout, see also function
+ * [chewing_KBStr2Num].
+ *
+ * The returned pointer must be freed by
+ * [chewing_free][super::setup::chewing_free].
+ *
+ * # Failures
+ *
+ * This function returns NULL when memory allocation fails.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -319,6 +420,34 @@ int chewing_get_KBType(const struct ChewingContext *ctx);
 char *chewing_get_KBString(const struct ChewingContext *ctx);
 
 /**
+ * Converts the keyboard layout name from string to corresponding layout
+ * index.
+ *
+ * If the string does not match any layout, this function returns
+ * KB_DEFAULT.
+ *
+ * The string str might be one of the following layouts:
+ * * KB_DEFAULT
+ * * KB_HSU
+ * * KB_IBM
+ * * KB_GIN_YIEH
+ * * KB_ET
+ * * KB_ET26
+ * * KB_DVORAK
+ * * KB_DVORAK_HSU
+ * * KB_DVORAK_CP26
+ * * KB_HANYU_PINYIN
+ * * KB_THL_PINYIN
+ * * KB_MPS2_PINYIN
+ * * KB_CARPALX
+ * * KB_COLEMAK
+ * * KB_COLEMAK_DH_ANSI
+ * * KB_COLEMAK_DH_ORTH
+ * * KB_WORKMAN
+ *
+ * See also [chewing_kbtype_Enumerate] for getting the list of supported
+ * layouts programmatically.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -326,6 +455,11 @@ char *chewing_get_KBString(const struct ChewingContext *ctx);
 int chewing_KBStr2Num(const char *str);
 
 /**
+ * Sets the input mode to Chinese or English.
+ *
+ * The *mode* argument is one of the [CHINESE_MODE] and [SYMBOL_MODE]
+ * constants.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -333,6 +467,8 @@ int chewing_KBStr2Num(const char *str);
 void chewing_set_ChiEngMode(struct ChewingContext *ctx, int mode);
 
 /**
+ * Returns the current Chinese/English mode setting.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -340,6 +476,11 @@ void chewing_set_ChiEngMode(struct ChewingContext *ctx, int mode);
 int chewing_get_ChiEngMode(const struct ChewingContext *ctx);
 
 /**
+ * Sets the current punctuation input mode.
+ *
+ * The *mode* argument is one of the [FULLSHAPE_MODE] and [HALFSHAPE_MODE]
+ * constants.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -347,6 +488,8 @@ int chewing_get_ChiEngMode(const struct ChewingContext *ctx);
 void chewing_set_ShapeMode(struct ChewingContext *ctx, int mode);
 
 /**
+ * Returns the current punctuation mode.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -354,6 +497,13 @@ void chewing_set_ShapeMode(struct ChewingContext *ctx, int mode);
 int chewing_get_ShapeMode(const struct ChewingContext *ctx);
 
 /**
+ * Sets the number of candidates returned per page.
+ *
+ * The setting is ignored if *n* is not between [MIN_SELKEY][super::public::MIN_SELKEY] and
+ * [MAX_SELKEY][super::public::MAX_SELKEY] inclusive.
+ *
+ * The default value is MAX_SELKEY.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -361,6 +511,10 @@ int chewing_get_ShapeMode(const struct ChewingContext *ctx);
 void chewing_set_candPerPage(struct ChewingContext *ctx, int n);
 
 /**
+ * Gets the number of candidates returned per page.
+ *
+ * The default value is MAX_SELKEY.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -368,13 +522,24 @@ void chewing_set_candPerPage(struct ChewingContext *ctx, int n);
 int chewing_get_candPerPage(const struct ChewingContext *ctx);
 
 /**
+ * Sets the maximum number of the Chinese characters allowed in the
+ * pre-edit buffer.
+ *
+ * If the pre-edit string is longer than this number then the leading part
+ * will be committed automatically. The range of n shall between
+ * [MIN_CHI_SYMBOL_LEN][super::public::MIN_CHI_SYMBOL_LEN] and [MAX_CHI_SYMBOL_LEN][super::public::MAX_CHI_SYMBOL_LEN].
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
  */
-void chewing_set_maxChiSymbolLen(struct ChewingContext *ctx, int n);
+void chewing_set_maxChiSymbolLen(struct ChewingContext *ctx,
+                                 int n);
 
 /**
+ * Returns the maximum number of the Chinese characters allowed in the
+ * pre-edit buffer.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -382,6 +547,13 @@ void chewing_set_maxChiSymbolLen(struct ChewingContext *ctx, int n);
 int chewing_get_maxChiSymbolLen(const struct ChewingContext *ctx);
 
 /**
+ * Sets the key codes for candidate selection.
+ *
+ * *selkeys* is an ASCII code integer array of length [MAX_SELKEY]. The
+ * second argument is unused.
+ *
+ * The default selection key is `1234567890`.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -389,6 +561,12 @@ int chewing_get_maxChiSymbolLen(const struct ChewingContext *ctx);
 void chewing_set_selKey(struct ChewingContext *ctx, const int *sel_keys, int len);
 
 /**
+ * Returns the current selection key setting.
+ *
+ * The returned value is a pointer to an integer array. The memory must
+ * be freed by the caller using function
+ * [chewing_free][super::setup::chewing_free].
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -396,6 +574,11 @@ void chewing_set_selKey(struct ChewingContext *ctx, const int *sel_keys, int len
 int *chewing_get_selKey(const struct ChewingContext *ctx);
 
 /**
+ * Sets the direction to add new phrases when using CtrlNum.
+ *
+ * The direction argument is 0 when the direction is backward and 1 when
+ * the direction is forward.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -403,6 +586,11 @@ int *chewing_get_selKey(const struct ChewingContext *ctx);
 void chewing_set_addPhraseDirection(struct ChewingContext *ctx, int direction);
 
 /**
+ * Returns the direction to add new phrases when using CtrlNum.
+ *
+ * The direction argument is 0 when the direction is backward and 1 when
+ * the direction is forward.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -410,6 +598,11 @@ void chewing_set_addPhraseDirection(struct ChewingContext *ctx, int direction);
 int chewing_get_addPhraseDirection(const struct ChewingContext *ctx);
 
 /**
+ * Sets whether the Space key is treated as a selection key.
+ *
+ * When the mode argument is 1, the Space key will initiate the candidates
+ * selection mode.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -417,6 +610,11 @@ int chewing_get_addPhraseDirection(const struct ChewingContext *ctx);
 void chewing_set_spaceAsSelection(struct ChewingContext *ctx, int mode);
 
 /**
+ * Returns whether the Space key is treated as a selection key.
+ *
+ * Returns 1 when the Space key will initiate the candidates selection
+ * mode.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -424,6 +622,10 @@ void chewing_set_spaceAsSelection(struct ChewingContext *ctx, int mode);
 int chewing_get_spaceAsSelection(const struct ChewingContext *ctx);
 
 /**
+ * Sets whether the Esc key will flush the current pre-edit buffer.
+ *
+ * When the mode argument is 1, the Esc key will flush the pre-edit buffer.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -431,6 +633,10 @@ int chewing_get_spaceAsSelection(const struct ChewingContext *ctx);
 void chewing_set_escCleanAllBuf(struct ChewingContext *ctx, int mode);
 
 /**
+ * Returns whether the Esc key will flush the current pre-edit buffer.
+ *
+ * Returns 1 when the Esc key will flush the pre-edit buffer.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -438,6 +644,9 @@ void chewing_set_escCleanAllBuf(struct ChewingContext *ctx, int mode);
 int chewing_get_escCleanAllBuf(const struct ChewingContext *ctx);
 
 /**
+ * Sets whether the Chewing IM will automatically shift cursor after
+ * selection.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -445,6 +654,9 @@ int chewing_get_escCleanAllBuf(const struct ChewingContext *ctx);
 void chewing_set_autoShiftCur(struct ChewingContext *ctx, int mode);
 
 /**
+ * Returns whether the Chewing IM will automatically shift cursor after
+ * selection.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -452,6 +664,16 @@ void chewing_set_autoShiftCur(struct ChewingContext *ctx, int mode);
 int chewing_get_autoShiftCur(const struct ChewingContext *ctx);
 
 /**
+ * Sets the current normal/easy symbol mode.
+ *
+ * In easy symbol mode, the key be will changed to its related easy symbol
+ * in swkb.dat. The format of swkb.dat is key symbol pair per line. The
+ * valid value of key is [0-9A-Z]. The lower case character in key will be
+ * changed to upper case when loading swkb.dat. However, in easy symbol
+ * mode, only [0-9A-Z] are accepted.
+ *
+ * The mode argument is 0 for normal mode or other for easy symbol mode.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -459,6 +681,8 @@ int chewing_get_autoShiftCur(const struct ChewingContext *ctx);
 void chewing_set_easySymbolInput(struct ChewingContext *ctx, int mode);
 
 /**
+ * Gets the current normal/easy symbol mode.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -466,6 +690,9 @@ void chewing_set_easySymbolInput(struct ChewingContext *ctx, int mode);
 int chewing_get_easySymbolInput(const struct ChewingContext *ctx);
 
 /**
+ * Sets whether the phrase for candidates selection is before the cursor or
+ * after the cursor.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -473,6 +700,8 @@ int chewing_get_easySymbolInput(const struct ChewingContext *ctx);
 void chewing_set_phraseChoiceRearward(struct ChewingContext *ctx, int mode);
 
 /**
+ * Returns the phrase choice rearward setting.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -480,6 +709,11 @@ void chewing_set_phraseChoiceRearward(struct ChewingContext *ctx, int mode);
 int chewing_get_phraseChoiceRearward(const struct ChewingContext *ctx);
 
 /**
+ * Sets enable or disable the automatic learning.
+ *
+ * The mode argument is be one of the [AUTOLEARN_ENABLED][super::public::AUTOLEARN_ENABLED] and
+ * [AUTOLEARN_DISABLED][super::public::AUTOLEARN_DISABLED] constants.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -487,6 +721,8 @@ int chewing_get_phraseChoiceRearward(const struct ChewingContext *ctx);
 void chewing_set_autoLearn(struct ChewingContext *ctx, int mode);
 
 /**
+ * Returns whether the automatic learning is enabled or disabled.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -494,6 +730,12 @@ void chewing_set_autoLearn(struct ChewingContext *ctx, int mode);
 int chewing_get_autoLearn(const struct ChewingContext *ctx);
 
 /**
+ * Returns the phonetic sequence in the Chewing IM internal state machine.
+ *
+ * The return value is a pointer to a unsigned short array. The values in
+ * the array is encoded Bopomofo phone. The memory must be freed by the
+ * caller using function [chewing_free][super::setup::chewing_free].
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -501,6 +743,9 @@ int chewing_get_autoLearn(const struct ChewingContext *ctx);
 unsigned short *chewing_get_phoneSeq(const struct ChewingContext *ctx);
 
 /**
+ * Returns the length of the phonetic sequence in the Chewing IM internal
+ * state machine.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -508,6 +753,34 @@ unsigned short *chewing_get_phoneSeq(const struct ChewingContext *ctx);
 int chewing_get_phoneSeqLen(const struct ChewingContext *ctx);
 
 /**
+ * Sets the external logger callback.
+ *
+ * The logger function is used to provide log inside Chewing IM for debugging.
+ * The user_data pointer is passed directly to the logger when logging.
+ *
+ * # Examples
+ *
+ * The following example shows how to use user_data:
+ *
+ * ```c
+ * void logger( void *data, int level, const char *fmt, ... )
+ * {
+ *     FILE *fd = (FILE *) data;
+ *     ...
+ * }
+ *
+ * int main()
+ * {
+ *     ChewingContext *ctx;
+ *     FILE *fd;
+ *     ...
+ *     chewing_set_logger(ctx, logger, fd);
+ *     ...
+ * }
+ * ```
+ *
+ * The level is log level.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -515,9 +788,35 @@ int chewing_get_phoneSeqLen(const struct ChewingContext *ctx);
 void chewing_set_logger(struct ChewingContext *ctx, void (*logger)(void *data,
                                                                    int level,
                                                                    const char *fmt,
-                                                                   ...), void *data);
+                                                                   ...), void *user_data);
 
 /**
+ * Starts a userphrase enumeration.
+ *
+ * Caller shall call this function prior [chewing_userphrase_has_next] and
+ * [chewing_userphrase_get] in order to enumerate userphrase correctly.
+ *
+ * This function stores an iterator in the context. The iterator is only
+ * destroyed after enumerate all userphrases using
+ * [chewing_userphrase_has_next].
+ *
+ * Returns 0 on success, -1 on failure.
+ *
+ * # Examples
+ *
+ * ```c
+ * chewing_userphrase_enumerate(ctx);
+ * while (chewing_userphrase_has_next(ctx, &phrase_len, &bopomofo_len)) {
+ *     phrase = malloc(phrase_len);
+ *     if (!phrase) goto error;
+ *     bopomofo = malloc(bopomofo_len);
+ *     if (!bopomofo) goto error;
+ *
+ *     chewing_userphrase_get(ctx, phrase, phrase_len, bopomofo, bopomofo_len);
+ *     // ...
+ * }
+ * ```
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -525,6 +824,12 @@ void chewing_set_logger(struct ChewingContext *ctx, void (*logger)(void *data,
 int chewing_userphrase_enumerate(struct ChewingContext *ctx);
 
 /**
+ * Checks if there is another userphrase in current enumeration.
+ *
+ * The *phrase_len* and *bopomofo_len* are output buffer length needed by the userphrase and its bopomofo string.
+ *
+ * Returns 1 when true, 0 when false.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -534,6 +839,14 @@ int chewing_userphrase_has_next(struct ChewingContext *ctx,
                                 unsigned int *bopomofo_len);
 
 /**
+ * Gets the current enumerated userphrase.
+ *
+ * The *phrase_buf* and *bopomofo_buf* are userphrase and its bopomofo
+ * buffer provided by caller. The length of the buffers can be retrived
+ * from [chewing_userphrase_has_next].
+ *
+ * Returns 0 on success, -1 on failure.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -545,6 +858,10 @@ int chewing_userphrase_get(struct ChewingContext *ctx,
                            unsigned int bopomofo_len);
 
 /**
+ * Adds new userphrase to the user dictionary.
+ *
+ * Returns how many phrases are added, -1 on failure.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -554,6 +871,10 @@ int chewing_userphrase_add(struct ChewingContext *ctx,
                            const char *bopomofo_buf);
 
 /**
+ * Removes a userphrase from the user dictionary.
+ *
+ * Returns how many phrases are removed, -1 on failure.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -563,6 +884,10 @@ int chewing_userphrase_remove(struct ChewingContext *ctx,
                               const char *bopomofo_buf);
 
 /**
+ * Searchs if a userphrase is in the user dictionary.
+ *
+ * Returns 1 when true, 0 when false.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -572,6 +897,15 @@ int chewing_userphrase_lookup(struct ChewingContext *ctx,
                               const char *bopomofo_buf);
 
 /**
+ * Sets the candidate list to the first (longest) candidate list.
+ *
+ * Returns 0 when success, -1 otherwise.
+ *
+ * # Errors
+ *
+ * This function fails if the candidate selection window is not currently
+ * open.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -579,6 +913,15 @@ int chewing_userphrase_lookup(struct ChewingContext *ctx,
 int chewing_cand_list_first(struct ChewingContext *ctx);
 
 /**
+ * Sets the candidate list to the last (shortest) candidate list.
+ *
+ * Returns 0 when success, -1 otherwise.
+ *
+ * # Errors
+ *
+ * This function fails if the candidate selection window is not currently
+ * open.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -586,6 +929,10 @@ int chewing_cand_list_first(struct ChewingContext *ctx);
 int chewing_cand_list_last(struct ChewingContext *ctx);
 
 /**
+ * Checks whether there is a next (shorter) candidate list.
+ *
+ * Returns 1 (true) when there is a next candidate list, 0 otherwise.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -593,6 +940,10 @@ int chewing_cand_list_last(struct ChewingContext *ctx);
 int chewing_cand_list_has_next(struct ChewingContext *ctx);
 
 /**
+ * Checks whether there is a previous (longer) candidate list.
+ *
+ * Returns 1 (true) when there is a previous candidate list, 0 otherwise.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -600,6 +951,15 @@ int chewing_cand_list_has_next(struct ChewingContext *ctx);
 int chewing_cand_list_has_prev(struct ChewingContext *ctx);
 
 /**
+ * Changes current candidate list to next candidate list.
+ *
+ * Returns 0 when success, -1 otherwise.
+ *
+ * # Errors
+ *
+ * This function fails if the candidate selection window is not currently
+ * open.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -607,6 +967,15 @@ int chewing_cand_list_has_prev(struct ChewingContext *ctx);
 int chewing_cand_list_next(struct ChewingContext *ctx);
 
 /**
+ * Changes current candidate list to previous candidate list.
+ *
+ * Returns 0 when success, -1 otherwise.
+ *
+ * # Errors
+ *
+ * This function fails if the candidate selection window is not currently
+ * open.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -614,6 +983,14 @@ int chewing_cand_list_next(struct ChewingContext *ctx);
 int chewing_cand_list_prev(struct ChewingContext *ctx);
 
 /**
+ * Commits the current preedit buffer content to the commit buffer.
+ *
+ * Returns 0 when success, -1 otherwise.
+ *
+ * # Errors
+ *
+ * This function fails if the IM editor is not in entering state.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -621,6 +998,14 @@ int chewing_cand_list_prev(struct ChewingContext *ctx);
 int chewing_commit_preedit_buf(struct ChewingContext *ctx);
 
 /**
+ * Clears the current preedit buffer content.
+ *
+ * Returns 0 when success, -1 otherwise.
+ *
+ * # Errors
+ *
+ * This function fails if the IM editor is not in entering state.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -628,6 +1013,14 @@ int chewing_commit_preedit_buf(struct ChewingContext *ctx);
 int chewing_clean_preedit_buf(struct ChewingContext *ctx);
 
 /**
+ * Clears the current bopomofo buffer content.
+ *
+ * Returns 0 when success, -1 otherwise.
+ *
+ * # Errors
+ *
+ * This function fails if the IM editor is not in entering state.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -635,6 +1028,14 @@ int chewing_clean_preedit_buf(struct ChewingContext *ctx);
 int chewing_clean_bopomofo_buf(struct ChewingContext *ctx);
 
 /**
+ * Converts the u16 encoded syllables to a bopomofo string.
+ *
+ * If both of the buf and the len are 0, this function will return buf
+ * length for bopomofo including the null character so that caller can
+ * prepare enough buffer for it.
+ *
+ * Returns 0 on success, -1 on failure.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -642,6 +1043,50 @@ int chewing_clean_bopomofo_buf(struct ChewingContext *ctx);
 int chewing_phone_to_bopomofo(unsigned short phone, char *buf, unsigned short len);
 
 /**
+ * Handles all possible key events.
+ *
+ * **code**
+ *
+ * Code that identifies a physical key on a keyboard.
+ *
+ * Keycodes are the result of the low-level processing of the data that
+ * keyboards send to a computer. For instance 36 may represent the return
+ * key.
+ *
+ * Symbolic names are assigned to raw keycodes in order to facilitate
+ * their mapping to symbols. By convention keycode names are based on US
+ * QWERTY layout. For example the keycode for the return key is
+ * RETURN.
+ *
+ * Chewing keycodes have same numeric encoding as X11 or xkbcommon
+ * keycodes.
+ *
+ * **ksym**
+ *
+ * The symbol on the cap of a key.
+ *
+ * Keysyms (short for "key symbol") are translated from keycodes via a
+ * keymap. On different layout (qwerty, dvorak, etc.) all keyboards emit
+ * the same keycodes but produce different keysyms after translation.
+ * The key press / release state and state of modifier keys.
+ *
+ * **state**
+ *
+ * Use the state mask to read whether a modifier key is active and
+ * whether the key is pressed.
+ *
+ * # Safety
+ *
+ * This function should be called with valid pointers.
+ */
+int chewing_handle_KeyboardEvent(struct ChewingContext *ctx,
+                                 uint8_t code,
+                                 uint32_t ksym,
+                                 uint32_t state);
+
+/**
+ * Handles the Space key.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -649,6 +1094,8 @@ int chewing_phone_to_bopomofo(unsigned short phone, char *buf, unsigned short le
 int chewing_handle_Space(struct ChewingContext *ctx);
 
 /**
+ * Handles the Esc key.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -656,6 +1103,8 @@ int chewing_handle_Space(struct ChewingContext *ctx);
 int chewing_handle_Esc(struct ChewingContext *ctx);
 
 /**
+ * Handles the Enter or Return key.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -663,6 +1112,8 @@ int chewing_handle_Esc(struct ChewingContext *ctx);
 int chewing_handle_Enter(struct ChewingContext *ctx);
 
 /**
+ * Handles the Delete key.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -670,6 +1121,8 @@ int chewing_handle_Enter(struct ChewingContext *ctx);
 int chewing_handle_Del(struct ChewingContext *ctx);
 
 /**
+ * Handles the Backspace key.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -677,6 +1130,8 @@ int chewing_handle_Del(struct ChewingContext *ctx);
 int chewing_handle_Backspace(struct ChewingContext *ctx);
 
 /**
+ * Handles the Tab key.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -684,6 +1139,8 @@ int chewing_handle_Backspace(struct ChewingContext *ctx);
 int chewing_handle_Tab(struct ChewingContext *ctx);
 
 /**
+ * Handles the Left key with the Shift modifier.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -691,6 +1148,8 @@ int chewing_handle_Tab(struct ChewingContext *ctx);
 int chewing_handle_ShiftLeft(struct ChewingContext *ctx);
 
 /**
+ * Handles the Left key.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -698,6 +1157,8 @@ int chewing_handle_ShiftLeft(struct ChewingContext *ctx);
 int chewing_handle_Left(struct ChewingContext *ctx);
 
 /**
+ * Handles the Right key with the Shift modifier.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -705,6 +1166,8 @@ int chewing_handle_Left(struct ChewingContext *ctx);
 int chewing_handle_ShiftRight(struct ChewingContext *ctx);
 
 /**
+ * Handles the Right key.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -712,6 +1175,11 @@ int chewing_handle_ShiftRight(struct ChewingContext *ctx);
 int chewing_handle_Right(struct ChewingContext *ctx);
 
 /**
+ * Handles the Up key.
+ *
+ * See also [chewing_cand_close][super::candidates::chewing_cand_close] keyboardless API to close candidate
+ * window.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -719,6 +1187,8 @@ int chewing_handle_Right(struct ChewingContext *ctx);
 int chewing_handle_Up(struct ChewingContext *ctx);
 
 /**
+ * Handles the Home key.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -726,6 +1196,8 @@ int chewing_handle_Up(struct ChewingContext *ctx);
 int chewing_handle_Home(struct ChewingContext *ctx);
 
 /**
+ * Handles the End key.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -733,6 +1205,8 @@ int chewing_handle_Home(struct ChewingContext *ctx);
 int chewing_handle_End(struct ChewingContext *ctx);
 
 /**
+ * Handles the PageUp key.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -740,6 +1214,8 @@ int chewing_handle_End(struct ChewingContext *ctx);
 int chewing_handle_PageUp(struct ChewingContext *ctx);
 
 /**
+ * Handles the PageDown key.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -747,6 +1223,10 @@ int chewing_handle_PageUp(struct ChewingContext *ctx);
 int chewing_handle_PageDown(struct ChewingContext *ctx);
 
 /**
+ * Handles the Down key.
+ *
+ * See also [super::io::chewing_cand_open] keyboardless API to open candidate window.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -754,6 +1234,8 @@ int chewing_handle_PageDown(struct ChewingContext *ctx);
 int chewing_handle_Down(struct ChewingContext *ctx);
 
 /**
+ * Handles the Capslock key.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -761,6 +1243,10 @@ int chewing_handle_Down(struct ChewingContext *ctx);
 int chewing_handle_Capslock(struct ChewingContext *ctx);
 
 /**
+ * Handles all keys that do not have dedicated methods.
+ *
+ * The value of of key can be any printable ASCII characters.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -768,6 +1254,11 @@ int chewing_handle_Capslock(struct ChewingContext *ctx);
 int chewing_handle_Default(struct ChewingContext *ctx, int key);
 
 /**
+ * Handles any number key with the Ctrl modifier.
+ *
+ * The value of key should be in the range between ASCII character code
+ * from 0 to 9.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -775,6 +1266,8 @@ int chewing_handle_Default(struct ChewingContext *ctx, int key);
 int chewing_handle_CtrlNum(struct ChewingContext *ctx, int key);
 
 /**
+ * Handles the Space key with the Shift modifier.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -782,6 +1275,8 @@ int chewing_handle_CtrlNum(struct ChewingContext *ctx, int key);
 int chewing_handle_ShiftSpace(struct ChewingContext *ctx);
 
 /**
+ * Handles tapping the Tab key twice quickly.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -789,6 +1284,11 @@ int chewing_handle_ShiftSpace(struct ChewingContext *ctx);
 int chewing_handle_DblTab(struct ChewingContext *ctx);
 
 /**
+ * Handles any numeric key from the keypad.
+ *
+ * The value of key should be in the range between ASCII character code
+ * from 0 to 9.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -796,6 +1296,10 @@ int chewing_handle_DblTab(struct ChewingContext *ctx);
 int chewing_handle_Numlock(struct ChewingContext *ctx, int key);
 
 /**
+ * Checks whether the commit buffer has something to read.
+ *
+ * Returns 1 when true, 0 when false.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -803,6 +1307,16 @@ int chewing_handle_Numlock(struct ChewingContext *ctx, int key);
 int chewing_commit_Check(const struct ChewingContext *ctx);
 
 /**
+ * Returns the string in the commit buffer.
+ *
+ * The returned value is a pointer to a character string. The memory must
+ * be freed by the caller using function
+ * [chewing_free][super::setup::chewing_free].
+ *
+ * # Failures
+ *
+ * This function returns NULL when memory allocation fails.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -810,6 +1324,12 @@ int chewing_commit_Check(const struct ChewingContext *ctx);
 char *chewing_commit_String(const struct ChewingContext *ctx);
 
 /**
+ * Returns the string in the commit buffer.
+ *
+ * The return value is a const pointer to a character string. The pointer
+ * is only valid immediately after checking the [chewing_commit_Check]
+ * condition.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -817,6 +1337,16 @@ char *chewing_commit_String(const struct ChewingContext *ctx);
 const char *chewing_commit_String_static(const struct ChewingContext *ctx);
 
 /**
+ * Returns the current output in the pre-edit buffer.
+ *
+ * The returned value is a pointer to a character string. The memory must
+ * be freed by the caller using function
+ * [chewing_free][super::setup::chewing_free].
+ *
+ * # Failures
+ *
+ * This function returns NULL when memory allocation fails.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -824,6 +1354,12 @@ const char *chewing_commit_String_static(const struct ChewingContext *ctx);
 char *chewing_buffer_String(const struct ChewingContext *ctx);
 
 /**
+ * Returns the current output in the pre-edit buffer.
+ *
+ * The return value is a const pointer to a character string. The pointer
+ * is only valid immediately after checking the [chewing_buffer_Check]
+ * condition.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -831,6 +1367,10 @@ char *chewing_buffer_String(const struct ChewingContext *ctx);
 const char *chewing_buffer_String_static(const struct ChewingContext *ctx);
 
 /**
+ * Checks whether there is output in the pre-edit buffer.
+ *
+ * Returns 1 when true, 0 when false.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -838,6 +1378,13 @@ const char *chewing_buffer_String_static(const struct ChewingContext *ctx);
 int chewing_buffer_Check(const struct ChewingContext *ctx);
 
 /**
+ * Returns the length of the string in current pre-edit buffer.
+ *
+ * <p style="background:rgba(255,181,77,0.16);padding:0.75em;">
+ * <strong>⚠ Warning:</strong> The length is calculated in terms of
+ * unicode characters. One character might occupy multiple bytes.
+ * </p>
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -845,6 +1392,12 @@ int chewing_buffer_Check(const struct ChewingContext *ctx);
 int chewing_buffer_Len(const struct ChewingContext *ctx);
 
 /**
+ * Returns the phonetic characters in the pre-edit buffer.
+ *
+ * The return value is a const pointer to a character string. The pointer
+ * is only valid immediately after checking the [chewing_bopomofo_Check]
+ * condition.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -852,6 +1405,16 @@ int chewing_buffer_Len(const struct ChewingContext *ctx);
 const char *chewing_bopomofo_String_static(const struct ChewingContext *ctx);
 
 /**
+ * Returns the phonetic characters in the pre-edit buffer.
+ *
+ * The returned value is a pointer to a character string. The memory must
+ * be freed by the caller using function
+ * [chewing_free][super::setup::chewing_free].
+ *
+ * # Failures
+ *
+ * This function returns NULL when memory allocation fails.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -859,6 +1422,10 @@ const char *chewing_bopomofo_String_static(const struct ChewingContext *ctx);
 char *chewing_bopomofo_String(const struct ChewingContext *ctx);
 
 /**
+ * Returns whether there are phonetic pre-edit string in the buffer.
+ *
+ * Returns 1 when true, 0 when false.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -866,6 +1433,8 @@ char *chewing_bopomofo_String(const struct ChewingContext *ctx);
 int chewing_bopomofo_Check(const struct ChewingContext *ctx);
 
 /**
+ * Returns the current cursor position in the pre-edit buffer.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -873,6 +1442,12 @@ int chewing_bopomofo_Check(const struct ChewingContext *ctx);
 int chewing_cursor_Current(const struct ChewingContext *ctx);
 
 /**
+ * Checks if the candidates selection has finished.
+ *
+ * <p style="background:rgba(255,181,77,0.16);padding:0.75em;">
+ * <strong>⚠ Warning:</strong> Not implemented.
+ * </p>
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -880,6 +1455,12 @@ int chewing_cursor_Current(const struct ChewingContext *ctx);
 int chewing_cand_CheckDone(const struct ChewingContext *ctx);
 
 /**
+ * Returns the number of pages of the candidates.
+ *
+ * If the return value is greater than zero, then the IM interface should
+ * display a selection window of the candidates for the user to choose a
+ * candidate. Otherwise hide the selection window.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -887,6 +1468,10 @@ int chewing_cand_CheckDone(const struct ChewingContext *ctx);
 int chewing_cand_TotalPage(const struct ChewingContext *ctx);
 
 /**
+ * Returns the number of the coices per page.
+ *
+ * See also the [chewing_set_candPerPage] function.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -894,6 +1479,8 @@ int chewing_cand_TotalPage(const struct ChewingContext *ctx);
 int chewing_cand_ChoicePerPage(const struct ChewingContext *ctx);
 
 /**
+ * Returns the total number of the available choices.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -901,6 +1488,18 @@ int chewing_cand_ChoicePerPage(const struct ChewingContext *ctx);
 int chewing_cand_TotalChoice(const struct ChewingContext *ctx);
 
 /**
+ * Returns the current candidate page number.
+ *
+ * # Examples
+ *
+ * The candidates pagination could be displayed as:
+ *
+ * ```c
+ * sprintf(buf, "[%d / %d]",
+ *     chewing_cand_CurrentPage(ctx),
+ *     chewing_cand_TotalPage(ctx));
+ * ```
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -908,6 +1507,13 @@ int chewing_cand_TotalChoice(const struct ChewingContext *ctx);
 int chewing_cand_CurrentPage(const struct ChewingContext *ctx);
 
 /**
+ * Starts the enumeration of the candidates starting from the first one in
+ * the current page.
+ *
+ * This function stores an iterator in the context. The iterator is only
+ * destroyed after enumerate candidates using
+ * [chewing_cand_hasNext].
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -915,6 +1521,13 @@ int chewing_cand_CurrentPage(const struct ChewingContext *ctx);
 void chewing_cand_Enumerate(struct ChewingContext *ctx);
 
 /**
+ * Checks if there are more candidates to enumerate.
+ *
+ * <p style="background:rgba(255,181,77,0.16);padding:0.75em;">
+ * <strong>⚠ Warning:</strong> This function checks the end of total choices
+ * instead of the end of current page.
+ * </p>
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -922,6 +1535,16 @@ void chewing_cand_Enumerate(struct ChewingContext *ctx);
 int chewing_cand_hasNext(struct ChewingContext *ctx);
 
 /**
+ * Returns the current enumerated candidate string.
+ *
+ * The returned value is a pointer to a character string. The memory must
+ * be freed by the caller using function
+ * [chewing_free][super::setup::chewing_free].
+ *
+ * # Failures
+ *
+ * This function returns NULL when memory allocation fails.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -929,6 +1552,14 @@ int chewing_cand_hasNext(struct ChewingContext *ctx);
 char *chewing_cand_String(struct ChewingContext *ctx);
 
 /**
+ * Returns the current enumerated candidate string.
+ *
+ * The returned string is emtpy string when enumeration is over.
+ *
+ * The return value is a const pointer to a character string. The pointer
+ * is only valid immediately after checking the [chewing_cand_hasNext]
+ * condition.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -936,6 +1567,18 @@ char *chewing_cand_String(struct ChewingContext *ctx);
 const char *chewing_cand_String_static(struct ChewingContext *ctx);
 
 /**
+ * Returns the candidate string by its index.
+ *
+ * The *index* must be between 0 and [chewing_cand_TotalChoice] inclusive.
+ *
+ * The returned value is a pointer to a character string. The memory must
+ * be freed by the caller using function
+ * [chewing_free][super::setup::chewing_free].
+ *
+ * # Failures
+ *
+ * This function returns NULL when memory allocation fails.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -943,6 +1586,13 @@ const char *chewing_cand_String_static(struct ChewingContext *ctx);
 char *chewing_cand_string_by_index(struct ChewingContext *ctx, int index);
 
 /**
+ * Returns the candidate string by its index.
+ *
+ * The *index* must be between 0 and [chewing_cand_TotalChoice] inclusive.
+ *
+ * The return value is a const pointer to a character string. The pointer
+ * is only valid immediately after calling this function.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -950,6 +1600,17 @@ char *chewing_cand_string_by_index(struct ChewingContext *ctx, int index);
 const char *chewing_cand_string_by_index_static(struct ChewingContext *ctx, int index);
 
 /**
+ * Selects the candidate by its index.
+ *
+ * The *index* must be between 0 and [chewing_cand_TotalChoice] inclusive.
+ *
+ * Returns 0 when success, -1 otherwise.
+ *
+ * # Errors
+ *
+ * This function fails if the *index* is out of range or the candidate
+ * selection window is not currently open.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -957,6 +1618,12 @@ const char *chewing_cand_string_by_index_static(struct ChewingContext *ctx, int 
 int chewing_cand_choose_by_index(struct ChewingContext *ctx, int index);
 
 /**
+ * Opens the candidate selection window.
+ *
+ * This operation is only allowed when the IM editor is in entering state.
+ *
+ * Returns 0 when success, -1 otherwise.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -964,6 +1631,10 @@ int chewing_cand_choose_by_index(struct ChewingContext *ctx, int index);
 int chewing_cand_open(struct ChewingContext *ctx);
 
 /**
+ * Closes the candidate selection window.
+ *
+ * Returns 0 when success, -1 otherwise.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -971,6 +1642,12 @@ int chewing_cand_open(struct ChewingContext *ctx);
 int chewing_cand_close(struct ChewingContext *ctx);
 
 /**
+ * Starts the enumeration of intervals of recognized phrases.
+ *
+ * This function stores an iterator in the context. The iterator is only
+ * destroyed after enumerate all intervals using
+ * [chewing_interval_hasNext].
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -978,6 +1655,10 @@ int chewing_cand_close(struct ChewingContext *ctx);
 void chewing_interval_Enumerate(struct ChewingContext *ctx);
 
 /**
+ * Checks whether there are more intervals or not.
+ *
+ * Returns 1 when true, 0 when false.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -985,6 +1666,10 @@ void chewing_interval_Enumerate(struct ChewingContext *ctx);
 int chewing_interval_hasNext(struct ChewingContext *ctx);
 
 /**
+ * Returns the current enumerated interval.
+ *
+ * The *it* argument is an output argument.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -992,6 +1677,10 @@ int chewing_interval_hasNext(struct ChewingContext *ctx);
 void chewing_interval_Get(struct ChewingContext *ctx, struct IntervalType *it);
 
 /**
+ * Returns whether there is auxiliary string in the auxiliary buffer.
+ *
+ * Returns 1 when true, 0 when false.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -999,6 +1688,13 @@ void chewing_interval_Get(struct ChewingContext *ctx, struct IntervalType *it);
 int chewing_aux_Check(const struct ChewingContext *ctx);
 
 /**
+ * Returns the length of the auxiliary string in the auxiliary buffer.
+ *
+ * <p style="background:rgba(255,181,77,0.16);padding:0.75em;">
+ * <strong>⚠ Warning:</strong> The length is calculated in terms of
+ * unicode characters. One character might occupy multiple bytes.
+ * </p>
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -1006,6 +1702,16 @@ int chewing_aux_Check(const struct ChewingContext *ctx);
 int chewing_aux_Length(const struct ChewingContext *ctx);
 
 /**
+ * Returns the current auxiliary string.
+ *
+ * The returned value is a pointer to a character string. The memory must
+ * be freed by the caller using function
+ * [chewing_free][super::setup::chewing_free].
+ *
+ * # Failures
+ *
+ * This function returns NULL when memory allocation fails.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -1013,6 +1719,12 @@ int chewing_aux_Length(const struct ChewingContext *ctx);
 char *chewing_aux_String(const struct ChewingContext *ctx);
 
 /**
+ * Returns the current auxiliary string.
+ *
+ * The return value is a const pointer to a character string. The pointer
+ * is only valid immediately after checking the [chewing_aux_Check]
+ * condition.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -1020,6 +1732,10 @@ char *chewing_aux_String(const struct ChewingContext *ctx);
 const char *chewing_aux_String_static(const struct ChewingContext *ctx);
 
 /**
+ * Checks whether the previous keystroke is ignored or not.
+ *
+ * Returns 1 when true, 0 when false.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -1027,6 +1743,14 @@ const char *chewing_aux_String_static(const struct ChewingContext *ctx);
 int chewing_keystroke_CheckIgnore(const struct ChewingContext *ctx);
 
 /**
+ * Checks whether the previous keystroke is absorbed or not.
+ *
+ * Returns 1 when true, 0 when false.
+ *
+ * Absorbed key means the Chewing IM state machine has accepted the key and
+ * changed its state accordingly. Caller should check various output
+ * buffers to see if they need to update the display.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -1034,6 +1758,8 @@ int chewing_keystroke_CheckIgnore(const struct ChewingContext *ctx);
 int chewing_keystroke_CheckAbsorb(const struct ChewingContext *ctx);
 
 /**
+ * Returns the number of keyboard layouts supported by the Chewing IM.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -1041,6 +1767,12 @@ int chewing_keystroke_CheckAbsorb(const struct ChewingContext *ctx);
 int chewing_kbtype_Total(const struct ChewingContext *_ctx);
 
 /**
+ * Starts the enumeration of the keyboard layouts.
+ *
+ * This function stores an iterator in the context. The iterator is only
+ * destroyed after enumerate all keyboard layouts using
+ * [chewing_kbtype_hasNext].
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -1048,6 +1780,10 @@ int chewing_kbtype_Total(const struct ChewingContext *_ctx);
 void chewing_kbtype_Enumerate(struct ChewingContext *ctx);
 
 /**
+ * Checks whether there are more keyboard layouts to enumerate.
+ *
+ * Returns 1 when there are more and 0 when it's the end of the iterator.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -1055,6 +1791,18 @@ void chewing_kbtype_Enumerate(struct ChewingContext *ctx);
 int chewing_kbtype_hasNext(struct ChewingContext *ctx);
 
 /**
+ * Returns the current enumerated keyboard layout name.
+ *
+ * The returned string is emtpy string when enumeration is over.
+ *
+ * The returned value is a pointer to a character string. The memory must
+ * be freed by the caller using function
+ * [chewing_free][super::setup::chewing_free].
+ *
+ * # Failures
+ *
+ * This function returns NULL when memory allocation fails.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -1062,6 +1810,14 @@ int chewing_kbtype_hasNext(struct ChewingContext *ctx);
 char *chewing_kbtype_String(struct ChewingContext *ctx);
 
 /**
+ * Returns the current enumerated keyboard layout name.
+ *
+ * The returned string is emtpy string when enumeration is over.
+ *
+ * The return value is a const pointer to a character string. The pointer
+ * is only valid immediately after checking the [chewing_kbtype_hasNext]
+ * condition.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -1069,6 +1825,17 @@ char *chewing_kbtype_String(struct ChewingContext *ctx);
 const char *chewing_kbtype_String_static(struct ChewingContext *ctx);
 
 /**
+ * Returns whether there are phonetic pre-edit string in the buffer. Here
+ * “zuin” means bopomofo, a phonetic system for transcribing Chinese,
+ * especially Mandarin.
+ *
+ * Returns **0** when true, **1** when false.
+ *
+ * <p style="background:rgba(255,181,77,0.16);padding:0.75em;">
+ * <strong>⚠ Warning:</strong> The return value of this function is
+ * different from other newer functions that returns boolean value.
+ * </p>
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -1076,6 +1843,19 @@ const char *chewing_kbtype_String_static(struct ChewingContext *ctx);
 int chewing_zuin_Check(const struct ChewingContext *ctx);
 
 /**
+ * Returns the phonetic characters in the pre-edit buffer.
+ *
+ * The bopomofo_count argument is a output argument. It will contain the
+ * number of phonetic characters in the returned string.
+ *
+ * The returned value is a pointer to a character string. The memory must
+ * be freed by the caller using function
+ * [chewing_free][super::setup::chewing_free].
+ *
+ * # Failures
+ *
+ * This function returns NULL when memory allocation fails.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -1083,20 +1863,28 @@ int chewing_zuin_Check(const struct ChewingContext *ctx);
 char *chewing_zuin_String(const struct ChewingContext *ctx, int *zuin_count);
 
 /**
- * # Safety
+ * This function exists only for backword compatibility.
  *
- * This function should be called with valid pointers.
+ * The `chewing_Init` function is no-op now. The return value is always 0.
  */
 int chewing_Init(const char *data_path, const char *hash_path);
 
 /**
- * # Safety
- *
- * This function should be called with valid pointers.
+ * This function exists only for backword compatibility.
  */
 void chewing_Terminate(void);
 
 /**
+ * Sets the selectAreaLen, maxChiSymbolLen and selKey parameter from pcd.
+ *
+ * The pcd argument is a pointer to a Chewing configuration data structure.
+ * See also the ChewingConfigData data type.
+ *
+ * The return value is 0 on success and -1 on failure.
+ *
+ * **Deprecated**, use the chewing_set_* function series to set parameters
+ * instead.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -1104,6 +1892,8 @@ void chewing_Terminate(void);
 int chewing_Configure(struct ChewingContext *ctx, struct ChewingConfigData *pcd);
 
 /**
+ * This function is no-op now. Use [chewing_set_selKey] instead.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.
@@ -1111,6 +1901,8 @@ int chewing_Configure(struct ChewingContext *ctx, struct ChewingConfigData *pcd)
 void chewing_set_hsuSelKeyType(struct ChewingContext *_ctx, int mode);
 
 /**
+ * This function is no-op now. Use [chewing_get_selKey] instead.
+ *
  * # Safety
  *
  * This function should be called with valid pointers.

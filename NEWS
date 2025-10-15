@@ -5,14 +5,20 @@ What's New in libchewing (unreleased)
   - cli: Now outputs and reads dictionary metadata in source file
   - cli: Detects mismatched phrase word count and syllable count
 
+* Developer Features
+  - New API `chewing_handle_KeyboardEvent()` can be used to support any
+    keyboard layout combination without updating libchewing. Other keyboard
+    handling API will be deprecated in future release.
+
 * Bug Fixes
   - Auto shift cursor after candidate selection now moves the cursor to the
     next phrase instead of the next word.
 
 * Changes
-  - SQLite support is not fully optional and disabled by default
+  - SQLite support is now fully optional and disabled by default
   - rust: new sqlite-bundled feature can be used to build with bundled sqlite
     to simplify the build configuration on Windows
+  - cli: will try to migrate to new schema when dumping chewing.sqlite3 file
   - Use less heuristic when calculating phrase segmentation score
   - Dictionary data are built directly from the libchewing-data repository
 
@@ -23,11 +29,14 @@ What's New in libchewing (unreleased)
   - Bump MSRV to 1.88
 
 
-What's New in libchewing 0.10.3 (Unreleased)
+What's New in libchewing 0.10.3 (August 24, 2025)
 ---------------------------------------------------------
 
 * Bug Fixes
   - Fix quick symbol menu for ｜(introduced in 0.8.0) (#737)
+
+* Dictionary
+  - Remove some incorrect phrase-bopomofo mapping entries
 
 
 What's New in libchewing 0.10.2 (August 14, 2025)

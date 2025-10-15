@@ -3,8 +3,9 @@
 //! Also known as the Dai Chien (大千) layout. It's the default layout on almost
 //! all platforms and the most commonly used one.
 
+use crate::input::keycode::*;
 use crate::{
-    editor::keyboard::{KeyEvent, KeyIndex},
+    input::KeyboardEvent,
     zhuyin::{Bopomofo, BopomofoKind, Syllable},
 };
 
@@ -32,50 +33,50 @@ impl Default for Standard {
 }
 
 impl SyllableEditor for Standard {
-    fn key_press(&mut self, key: KeyEvent) -> KeyBehavior {
-        let bopomofo = match key.index {
-            KeyIndex::K1 => Bopomofo::B,
-            KeyIndex::K2 => Bopomofo::D,
-            KeyIndex::K3 => Bopomofo::TONE3,
-            KeyIndex::K4 => Bopomofo::TONE4,
-            KeyIndex::K5 => Bopomofo::ZH,
-            KeyIndex::K6 => Bopomofo::TONE2,
-            KeyIndex::K7 => Bopomofo::TONE5,
-            KeyIndex::K8 => Bopomofo::A,
-            KeyIndex::K9 => Bopomofo::AI,
-            KeyIndex::K10 => Bopomofo::AN,
-            KeyIndex::K11 => Bopomofo::ER,
-            KeyIndex::K15 => Bopomofo::P,
-            KeyIndex::K16 => Bopomofo::T,
-            KeyIndex::K17 => Bopomofo::G,
-            KeyIndex::K18 => Bopomofo::J,
-            KeyIndex::K19 => Bopomofo::CH,
-            KeyIndex::K20 => Bopomofo::Z,
-            KeyIndex::K21 => Bopomofo::I,
-            KeyIndex::K22 => Bopomofo::O,
-            KeyIndex::K23 => Bopomofo::EI,
-            KeyIndex::K24 => Bopomofo::EN,
-            KeyIndex::K27 => Bopomofo::M,
-            KeyIndex::K28 => Bopomofo::N,
-            KeyIndex::K29 => Bopomofo::K,
-            KeyIndex::K30 => Bopomofo::Q,
-            KeyIndex::K31 => Bopomofo::SH,
-            KeyIndex::K32 => Bopomofo::C,
-            KeyIndex::K33 => Bopomofo::U,
-            KeyIndex::K34 => Bopomofo::E,
-            KeyIndex::K35 => Bopomofo::AU,
-            KeyIndex::K36 => Bopomofo::ANG,
-            KeyIndex::K38 => Bopomofo::F,
-            KeyIndex::K39 => Bopomofo::L,
-            KeyIndex::K40 => Bopomofo::H,
-            KeyIndex::K41 => Bopomofo::X,
-            KeyIndex::K42 => Bopomofo::R,
-            KeyIndex::K43 => Bopomofo::S,
-            KeyIndex::K44 => Bopomofo::IU,
-            KeyIndex::K45 => Bopomofo::EH,
-            KeyIndex::K46 => Bopomofo::OU,
-            KeyIndex::K47 => Bopomofo::ENG,
-            KeyIndex::K48 => Bopomofo::TONE1,
+    fn key_press(&mut self, key: KeyboardEvent) -> KeyBehavior {
+        let bopomofo = match key.code {
+            KEY_1 => Bopomofo::B,
+            KEY_2 => Bopomofo::D,
+            KEY_3 => Bopomofo::TONE3,
+            KEY_4 => Bopomofo::TONE4,
+            KEY_5 => Bopomofo::ZH,
+            KEY_6 => Bopomofo::TONE2,
+            KEY_7 => Bopomofo::TONE5,
+            KEY_8 => Bopomofo::A,
+            KEY_9 => Bopomofo::AI,
+            KEY_0 => Bopomofo::AN,
+            KEY_MINUS => Bopomofo::ER,
+            KEY_Q => Bopomofo::P,
+            KEY_W => Bopomofo::T,
+            KEY_E => Bopomofo::G,
+            KEY_R => Bopomofo::J,
+            KEY_T => Bopomofo::CH,
+            KEY_Y => Bopomofo::Z,
+            KEY_U => Bopomofo::I,
+            KEY_I => Bopomofo::O,
+            KEY_O => Bopomofo::EI,
+            KEY_P => Bopomofo::EN,
+            KEY_A => Bopomofo::M,
+            KEY_S => Bopomofo::N,
+            KEY_D => Bopomofo::K,
+            KEY_F => Bopomofo::Q,
+            KEY_G => Bopomofo::SH,
+            KEY_H => Bopomofo::C,
+            KEY_J => Bopomofo::U,
+            KEY_K => Bopomofo::E,
+            KEY_L => Bopomofo::AU,
+            KEY_SEMICOLON => Bopomofo::ANG,
+            KEY_Z => Bopomofo::F,
+            KEY_X => Bopomofo::L,
+            KEY_C => Bopomofo::H,
+            KEY_V => Bopomofo::X,
+            KEY_B => Bopomofo::R,
+            KEY_N => Bopomofo::S,
+            KEY_M => Bopomofo::IU,
+            KEY_COMMA => Bopomofo::EH,
+            KEY_DOT => Bopomofo::OU,
+            KEY_SLASH => Bopomofo::ENG,
+            KEY_SPACE => Bopomofo::TONE1,
             _ => return KeyBehavior::KeyError,
         };
         if bopomofo.kind() == BopomofoKind::Tone {
@@ -125,9 +126,9 @@ impl SyllableEditor for Standard {
 
 #[cfg(test)]
 mod test {
-    use crate::editor::{
-        keyboard::{KeyCode, KeyboardLayout, Modifiers, Qwerty},
-        zhuyin_layout::{KeyBehavior, SyllableEditor},
+    use crate::{
+        editor::zhuyin_layout::{KeyBehavior, SyllableEditor},
+        input::{KeyboardEvent, keycode::KEY_SPACE, keysym::SYM_SPACE},
     };
 
     use super::Standard;
@@ -135,9 +136,11 @@ mod test {
     #[test]
     fn space() {
         let mut editor = Standard::new();
-        let keyboard = Qwerty;
-        let behavior =
-            editor.key_press(keyboard.map_with_mod(KeyCode::Space, Modifiers::default()));
+        let behavior = editor.key_press(KeyboardEvent {
+            code: KEY_SPACE,
+            ksym: SYM_SPACE,
+            state: 0,
+        });
         assert_eq!(KeyBehavior::KeyError, behavior);
     }
 }
