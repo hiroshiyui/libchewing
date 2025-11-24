@@ -4,15 +4,27 @@ What's New in libchewing (unreleased)
 * Features
   - cli: Now outputs and reads dictionary metadata in source file
   - cli: Detects mismatched phrase word count and syllable count
+  - editor: Support optional sorting candidates by frequency. Previously the
+    candidates are always sorted by their order in the dictionary.
 
 * Developer Features
   - New API `chewing_handle_KeyboardEvent()` can be used to support any
     keyboard layout combination without updating libchewing. Other keyboard
     handling API will be deprecated in future release.
+  - New API `chewing_new3()` and `chewing_get_defaultDictonaryNames()` can be
+    used to initialize a chewing context with specific dictionaries enabled.
+  - New boolean config option `chewing.sort_candidates_by_frequency` can be
+    set to enable sorting candidates by frequency.
+  - Rust type SyllableSlice is removed from public interfaces.
 
 * Bug Fixes
   - Auto shift cursor after candidate selection now moves the cursor to the
     next phrase instead of the next word.
+  - Fixed a bug when switching input mode from Chinese to English, the state
+    can be stuck in entering bopomofo.
+  - Fixed the frequency estimation function used by phrase learning to really
+    take last used time into consideration. Also assign higher frequency to
+    newly learned phrases.
 
 * Changes
   - SQLite support is now fully optional and disabled by default
@@ -21,6 +33,11 @@ What's New in libchewing (unreleased)
   - cli: will try to migrate to new schema when dumping chewing.sqlite3 file
   - Use less heuristic when calculating phrase segmentation score
   - Dictionary data are built directly from the libchewing-data repository
+  - cli: init-database will no longer normalize the frequency of single word
+    phrase to zero.
+  - autolearn: new phrases with break words inside will be learned both with
+    and without the break word.
+  - rust: simplified dictionary API.
 
 * Dictionary
   - Default symbols.dat now includes commonly used emojis.

@@ -19,7 +19,7 @@ use der::{
 };
 use log::{error, warn};
 
-use crate::zhuyin::{Syllable, SyllableSlice};
+use crate::zhuyin::Syllable;
 
 use super::{
     BuildDictionaryError, Dictionary, DictionaryBuilder, DictionaryInfo, Entries, LookupStrategy,
@@ -95,11 +95,11 @@ impl TrieLeafView<'_> {
 /// let dict = Trie::new(&mut file)?;
 ///
 /// // Find the phrase ㄗˋㄉ一ㄢˇ (dictionary)
-/// let mut phrase = dict.lookup_first_phrase(&[
+/// let phrase = dict.lookup(&[
 ///     syl![Bopomofo::Z, Bopomofo::TONE4],
 ///     syl![Bopomofo::D, Bopomofo::I, Bopomofo::AN, Bopomofo::TONE3]
 /// ], LookupStrategy::Standard);
-/// assert_eq!("字典", phrase.unwrap().as_str());
+/// assert_eq!("字典", phrase.first().unwrap().as_str());
 /// # Ok(())
 /// # }
 /// ```
@@ -258,12 +258,7 @@ macro_rules! iter_bail_if_oob {
 }
 
 impl Dictionary for Trie {
-    fn lookup_first_n_phrases(
-        &self,
-        syllables: &dyn SyllableSlice,
-        first: usize,
-        strategy: LookupStrategy,
-    ) -> Vec<Phrase> {
+    fn lookup(&self, syllables: &[Syllable], strategy: LookupStrategy) -> Vec<Phrase> {
         let dict = self.index.as_ref();
         let data = self.phrase_seq.as_ref();
 
@@ -293,7 +288,7 @@ impl Dictionary for Trie {
         // Perform a BFS search to find all leaf nodes
         let mut threads: VecDeque<TrieNodeView<'_>> = VecDeque::new();
         threads.push_back(root);
-        for syl in syllables.to_slice().iter() {
+        for syl in syllables {
             debug_assert!(syl.to_u16() != 0);
             for _ in 0..threads.len() {
                 let node = threads.pop_front().unwrap();
@@ -325,9 +320,6 @@ impl Dictionary for Trie {
             }
             bail_if_oob!(leaf.data_begin(), leaf.data_end(), data.len());
             result.extend(PhrasesIter::new(&data[leaf.data_begin()..leaf.data_end()]));
-            if result.len() > first {
-                break;
-            }
         }
         result
     }
@@ -1291,7 +1283,7 @@ mod tests {
         let dict = Trie::new(&mut cursor)?;
         assert_eq!(
             vec![Phrase::new("測", 1), Phrase::new("冊", 1)],
-            dict.lookup_all_phrases(
+            dict.lookup(
                 &[syl![Bopomofo::C, Bopomofo::E, Bopomofo::TONE4]],
                 LookupStrategy::Standard
             )
@@ -1317,14 +1309,14 @@ mod tests {
         let dict = TrieOpenOptions::new().read_from(&mut cursor)?;
         assert_eq!(
             vec![Phrase::new("測", 1), Phrase::new("冊", 1)],
-            dict.lookup_all_phrases(
+            dict.lookup(
                 &[syl![Bopomofo::C, Bopomofo::E]],
                 LookupStrategy::FuzzyPartialPrefix
             )
         );
         assert_eq!(
             vec![Phrase::new("測", 1), Phrase::new("冊", 1)],
-            dict.lookup_all_phrases(&[syl![Bopomofo::C]], LookupStrategy::FuzzyPartialPrefix)
+            dict.lookup(&[syl![Bopomofo::C]], LookupStrategy::FuzzyPartialPrefix)
         );
 
         Ok(())
@@ -1362,7 +1354,7 @@ mod tests {
         let dict = Trie::new(&mut cursor)?;
         assert_eq!(
             vec![Phrase::new("策試", 2), Phrase::new("測試", 1)],
-            dict.lookup_all_phrases(
+            dict.lookup(
                 &[
                     syl![Bopomofo::C, Bopomofo::E, Bopomofo::TONE4],
                     syl![Bopomofo::SH, Bopomofo::TONE4]
@@ -1372,7 +1364,7 @@ mod tests {
         );
         assert_eq!(
             vec![Phrase::new("測試成功", 3)],
-            dict.lookup_all_phrases(
+            dict.lookup(
                 &[
                     syl![Bopomofo::C, Bopomofo::E, Bopomofo::TONE4],
                     syl![Bopomofo::SH, Bopomofo::TONE4],
@@ -1384,7 +1376,7 @@ mod tests {
         );
         assert_eq!(
             Vec::<Phrase>::new(),
-            dict.lookup_all_phrases(
+            dict.lookup(
                 &[
                     syl![Bopomofo::C, Bopomofo::U, Bopomofo::O, Bopomofo::TONE4],
                     syl![Bopomofo::U, Bopomofo::TONE4]
@@ -1430,21 +1422,21 @@ mod tests {
             .read_from(&mut cursor)?;
         assert_eq!(
             vec![Phrase::new("策試", 2), Phrase::new("測試", 1)],
-            dict.lookup_all_phrases(
+            dict.lookup(
                 &[syl![Bopomofo::C, Bopomofo::E], syl![Bopomofo::SH]],
                 LookupStrategy::FuzzyPartialPrefix
             )
         );
         assert_eq!(
             vec![Phrase::new("策試", 2), Phrase::new("測試", 1)],
-            dict.lookup_all_phrases(
+            dict.lookup(
                 &[syl![Bopomofo::C], syl![Bopomofo::SH]],
                 LookupStrategy::FuzzyPartialPrefix
             )
         );
         assert_eq!(
             vec![Phrase::new("測試成功", 3)],
-            dict.lookup_all_phrases(
+            dict.lookup(
                 &[
                     syl![Bopomofo::C, Bopomofo::E],
                     syl![Bopomofo::SH],
@@ -1456,7 +1448,7 @@ mod tests {
         );
         assert_eq!(
             vec![Phrase::new("測試成功", 3)],
-            dict.lookup_all_phrases(
+            dict.lookup(
                 &[
                     syl![Bopomofo::C],
                     syl![Bopomofo::SH],
@@ -1468,7 +1460,7 @@ mod tests {
         );
         assert_eq!(
             Vec::<Phrase>::new(),
-            dict.lookup_all_phrases(
+            dict.lookup(
                 &[
                     syl![Bopomofo::C, Bopomofo::U, Bopomofo::O, Bopomofo::TONE4],
                     syl![Bopomofo::U, Bopomofo::TONE4]
@@ -1523,7 +1515,7 @@ mod tests {
                 Phrase::new("測", 0),
                 Phrase::new("側", 0),
             ],
-            dict.lookup_all_phrases(
+            dict.lookup(
                 &[syl![Bopomofo::C, Bopomofo::E, Bopomofo::TONE4],],
                 LookupStrategy::Standard
             )
@@ -1581,7 +1573,7 @@ mod tests {
                 Phrase::new("側視", 318),
                 Phrase::new("側室", 318),
             ],
-            dict.lookup_all_phrases(
+            dict.lookup(
                 &[
                     syl![Bopomofo::C, Bopomofo::E, Bopomofo::TONE4],
                     syl![Bopomofo::SH, Bopomofo::TONE4],

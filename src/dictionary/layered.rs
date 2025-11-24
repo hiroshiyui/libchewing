@@ -5,7 +5,7 @@ use std::{
 
 use log::error;
 
-use crate::zhuyin::SyllableSlice;
+use crate::zhuyin::Syllable;
 
 use super::{
     Dictionary, DictionaryInfo, DictionaryMut, Entries, LookupStrategy, Phrase,
@@ -39,7 +39,7 @@ use super::{
 ///     ]
 ///     .into_iter()
 ///     .collect::<Vec<Phrase>>(),
-///     dict.lookup_all_phrases(&[
+///     dict.lookup(&[
 ///         syl![Bopomofo::C, Bopomofo::E, Bopomofo::TONE4]
 ///     ], LookupStrategy::Standard),
 /// );
@@ -81,12 +81,7 @@ impl Dictionary for Layered {
     ///     Else
     ///       Add phrases <- (phrase, freq)
     /// ```
-    fn lookup_first_n_phrases(
-        &self,
-        syllables: &dyn SyllableSlice,
-        first: usize,
-        strategy: LookupStrategy,
-    ) -> Vec<Phrase> {
+    fn lookup(&self, syllables: &[Syllable], strategy: LookupStrategy) -> Vec<Phrase> {
         let mut sort_map: BTreeMap<String, usize> = BTreeMap::new();
         let mut phrases: Vec<Phrase> = Vec::new();
 
@@ -94,7 +89,7 @@ impl Dictionary for Layered {
             .iter()
             .chain(iter::once(&self.user_dict))
             .for_each(|d| {
-                for phrase in d.lookup_all_phrases(syllables, strategy) {
+                for phrase in d.lookup(syllables, strategy) {
                     debug_assert!(!phrase.as_str().is_empty());
                     match sort_map.entry(phrase.to_string()) {
                         Entry::Occupied(entry) => {
@@ -108,7 +103,6 @@ impl Dictionary for Layered {
                     }
                 }
             });
-        phrases.truncate(first);
         phrases
     }
 
@@ -159,7 +153,7 @@ impl DictionaryMut for Layered {
 
     fn add_phrase(
         &mut self,
-        syllables: &dyn SyllableSlice,
+        syllables: &[Syllable],
         phrase: Phrase,
     ) -> Result<(), UpdateDictionaryError> {
         if phrase.as_str().is_empty() {
@@ -175,7 +169,7 @@ impl DictionaryMut for Layered {
 
     fn update_phrase(
         &mut self,
-        syllables: &dyn SyllableSlice,
+        syllables: &[Syllable],
         phrase: Phrase,
         user_freq: u32,
         time: u64,
@@ -193,7 +187,7 @@ impl DictionaryMut for Layered {
 
     fn remove_phrase(
         &mut self,
-        syllables: &dyn SyllableSlice,
+        syllables: &[Syllable],
         phrase_str: &str,
     ) -> Result<(), UpdateDictionaryError> {
         if let Some(writer) = self.user_dict.as_dict_mut() {
@@ -278,10 +272,12 @@ mod tests {
         let dict = Layered::new(vec![Box::new(sys_dict)], Box::new(user_dict));
         assert_eq!(
             Some(("側", 1, 0).into()),
-            dict.lookup_first_phrase(
+            dict.lookup(
                 &vec![syl![Bopomofo::C, Bopomofo::E, Bopomofo::TONE4]],
                 LookupStrategy::Standard
-            ),
+            )
+            .first()
+            .cloned(),
         );
         assert_eq!(
             [
@@ -292,7 +288,7 @@ mod tests {
             ]
             .into_iter()
             .collect::<Vec<Phrase>>(),
-            dict.lookup_all_phrases(
+            dict.lookup(
                 &vec![syl![Bopomofo::C, Bopomofo::E, Bopomofo::TONE4]],
                 LookupStrategy::Standard
             ),
@@ -323,10 +319,12 @@ mod tests {
         let mut dict = Layered::new(vec![Box::new(sys_dict)], Box::new(user_dict));
         assert_eq!(
             Some(("側", 1, 0).into()),
-            dict.lookup_first_phrase(
+            dict.lookup(
                 &vec![syl![Bopomofo::C, Bopomofo::E, Bopomofo::TONE4]],
                 LookupStrategy::Standard
-            ),
+            )
+            .first()
+            .cloned(),
         );
         assert_eq!(
             [
@@ -337,7 +335,7 @@ mod tests {
             ]
             .into_iter()
             .collect::<Vec<Phrase>>(),
-            dict.lookup_all_phrases(
+            dict.lookup(
                 &vec![syl![Bopomofo::C, Bopomofo::E, Bopomofo::TONE4]],
                 LookupStrategy::Standard
             ),

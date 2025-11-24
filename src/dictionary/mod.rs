@@ -10,10 +10,13 @@ use std::{
     path::Path,
 };
 
-use crate::zhuyin::{Syllable, SyllableSlice};
+use crate::zhuyin::Syllable;
 
 pub use layered::Layered;
-pub use loader::{LoadDictionaryError, SystemDictionaryLoader, UserDictionaryLoader};
+pub use loader::{
+    DEFAULT_DICT_NAMES, LoadDictionaryError, SingleDictionaryLoader, SystemDictionaryLoader,
+    UserDictionaryLoader,
+};
 #[cfg(feature = "sqlite")]
 pub use sqlite::{SqliteDictionary, SqliteDictionaryBuilder, SqliteDictionaryError};
 pub use trie::{Trie, TrieBuilder, TrieOpenOptions, TrieStatistics};
@@ -268,7 +271,7 @@ impl Display for Phrase {
 ///     (vec![syl![Bopomofo::C, Bopomofo::E, Bopomofo::TONE4]], vec![("測", 100)]),
 /// ]);
 ///
-/// for phrase in dict.lookup_all_phrases(
+/// for phrase in dict.lookup(
 ///     &[syl![Bopomofo::C, Bopomofo::E, Bopomofo::TONE4]], LookupStrategy::Standard
 /// ) {
 ///     assert_eq!("測", phrase.as_str());
@@ -325,7 +328,7 @@ pub enum LookupStrategy {
 /// let mut dict = TrieBuf::new_in_memory();
 /// dict.add_phrase(&[syl![Bopomofo::C, Bopomofo::E, Bopomofo::TONE4]], ("測", 100).into())?;
 ///
-/// for phrase in dict.lookup_all_phrases(
+/// for phrase in dict.lookup(
 ///     &[syl![Bopomofo::C, Bopomofo::E, Bopomofo::TONE4]], LookupStrategy::Standard
 /// ) {
 ///     assert_eq!("測", phrase.as_str());
@@ -335,37 +338,10 @@ pub enum LookupStrategy {
 /// # }
 /// ```
 pub trait Dictionary: Debug {
-    /// Returns first N phrases matched by the syllables.
-    ///
-    /// The result should use a stable order each time for the same input.
-    fn lookup_first_n_phrases(
-        &self,
-        syllables: &dyn SyllableSlice,
-        first: usize,
-        strategy: LookupStrategy,
-    ) -> Vec<Phrase>;
-    /// Returns the first phrase matched by the syllables.
-    ///
-    /// The result should use a stable order each time for the same input.
-    fn lookup_first_phrase(
-        &self,
-        syllables: &dyn SyllableSlice,
-        strategy: LookupStrategy,
-    ) -> Option<Phrase> {
-        self.lookup_first_n_phrases(syllables, 1, strategy)
-            .into_iter()
-            .next()
-    }
     /// Returns all phrases matched by the syllables.
     ///
     /// The result should use a stable order each time for the same input.
-    fn lookup_all_phrases(
-        &self,
-        syllables: &dyn SyllableSlice,
-        strategy: LookupStrategy,
-    ) -> Vec<Phrase> {
-        self.lookup_first_n_phrases(syllables, usize::MAX, strategy)
-    }
+    fn lookup(&self, syllables: &[Syllable], strategy: LookupStrategy) -> Vec<Phrase>;
     /// Returns an iterator to all phrases in the dictionary.
     fn entries(&self) -> Entries<'_>;
     /// Returns information about the dictionary instance.
@@ -407,14 +383,14 @@ pub trait DictionaryMut: Debug {
     /// TODO: doc
     fn add_phrase(
         &mut self,
-        syllables: &dyn SyllableSlice,
+        syllables: &[Syllable],
         phrase: Phrase,
     ) -> Result<(), UpdateDictionaryError>;
 
     /// TODO: doc
     fn update_phrase(
         &mut self,
-        syllables: &dyn SyllableSlice,
+        syllables: &[Syllable],
         phrase: Phrase,
         user_freq: u32,
         time: u64,
@@ -423,7 +399,7 @@ pub trait DictionaryMut: Debug {
     /// TODO: doc
     fn remove_phrase(
         &mut self,
-        syllables: &dyn SyllableSlice,
+        syllables: &[Syllable],
         phrase_str: &str,
     ) -> Result<(), UpdateDictionaryError>;
 }

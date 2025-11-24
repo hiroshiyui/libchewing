@@ -6,7 +6,10 @@ use std::{
 
 use log::trace;
 
-use crate::dictionary::{Dictionary, LookupStrategy, Phrase};
+use crate::{
+    dictionary::{Dictionary, LookupStrategy, Phrase},
+    zhuyin::Syllable,
+};
 
 use super::{Composition, ConversionEngine, Gap, Interval, Symbol};
 
@@ -64,15 +67,14 @@ fn log_softmax(intervals: Vec<PossibleInterval>) -> Vec<PossibleInterval> {
     let shifted: Vec<f64> = x.iter().map(|&x| x / scale).collect();
     let log_sum_exp = shifted.iter().map(|&v| v.exp()).sum::<f64>().ln();
 
-    let intervals = intervals
+    intervals
         .into_iter()
-        .zip(shifted.into_iter())
+        .zip(shifted)
         .map(|(mut i, v)| {
             i.weight = v - log_sum_exp;
             i
         })
-        .collect();
-    intervals
+        .collect()
 }
 
 impl ConversionEngine for ChewingEngine {
@@ -149,9 +151,14 @@ impl ChewingEngine {
             return None;
         }
 
+        let syllables: Vec<Syllable> = symbols
+            .iter()
+            .map(|s| s.to_syllable().unwrap_or_default())
+            .collect();
+
         let mut max_freq = 0;
         let mut best_phrase = None;
-        'next_phrase: for phrase in dict.lookup_all_phrases(&symbols, self.lookup_strategy) {
+        'next_phrase: for phrase in dict.lookup(&syllables, self.lookup_strategy) {
             // If there exists a user selected interval which is a
             // sub-interval of this phrase but the substring is
             // different then we can skip this phrase.

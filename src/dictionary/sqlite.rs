@@ -8,7 +8,7 @@ use std::{
 
 use rusqlite::{Connection, Error as RusqliteError, OpenFlags, OptionalExtension, params};
 
-use crate::zhuyin::{Syllable, SyllableSlice};
+use crate::zhuyin::Syllable;
 
 use super::{
     BuildDictionaryError, Dictionary, DictionaryBuilder, DictionaryInfo, DictionaryMut, Entries,
@@ -17,6 +17,21 @@ use super::{
 
 const APPLICATION_ID: u32 = 0x43484557; // 'CHEW' in big-endian
 const USER_VERSION: u32 = 0;
+
+/// A slice that can be converted to a slice of syllables.
+trait SyllableSlice {
+    fn to_bytes(&self) -> Vec<u8>;
+}
+
+impl SyllableSlice for &[Syllable] {
+    fn to_bytes(&self) -> Vec<u8> {
+        let mut syllables_bytes = vec![];
+        self.iter().for_each(|syl| {
+            syllables_bytes.extend_from_slice(&syl.as_ref().to_u16().to_le_bytes())
+        });
+        syllables_bytes
+    }
+}
 
 /// TODO: doc
 #[derive(Debug)]
@@ -55,7 +70,7 @@ pub struct SqliteDictionary {
     conn: Connection,
     path: Option<PathBuf>,
     info: DictionaryInfo,
-    read_only: bool,
+    readonly: bool,
 }
 
 impl SqliteDictionary {
@@ -72,12 +87,12 @@ impl SqliteDictionary {
             conn,
             path: Some(path),
             info,
-            read_only: false,
+            readonly: false,
         })
     }
 
     /// TODO: doc
-    pub fn open_read_only<P: AsRef<Path>>(
+    pub fn open_readonly<P: AsRef<Path>>(
         path: P,
     ) -> Result<SqliteDictionary, SqliteDictionaryError> {
         let path = path.as_ref().to_path_buf();
@@ -89,7 +104,7 @@ impl SqliteDictionary {
             conn,
             path: Some(path),
             info,
-            read_only: true,
+            readonly: true,
         })
     }
 
@@ -104,7 +119,7 @@ impl SqliteDictionary {
             conn,
             path: None,
             info,
-            read_only: false,
+            readonly: false,
         })
     }
 
@@ -298,12 +313,7 @@ impl From<RusqliteError> for UpdateDictionaryError {
 }
 
 impl Dictionary for SqliteDictionary {
-    fn lookup_first_n_phrases(
-        &self,
-        syllables: &dyn SyllableSlice,
-        first: usize,
-        strategy: LookupStrategy,
-    ) -> Vec<Phrase> {
+    fn lookup(&self, syllables: &[Syllable], strategy: LookupStrategy) -> Vec<Phrase> {
         let _ = strategy;
         let syllables_bytes = syllables.to_bytes();
         let mut stmt = self
@@ -328,7 +338,6 @@ impl Dictionary for SqliteDictionary {
         })
         .unwrap()
         .map(|r| r.unwrap())
-        .take(first)
         .collect()
     }
 
@@ -376,7 +385,7 @@ impl Dictionary for SqliteDictionary {
     }
 
     fn as_dict_mut(&mut self) -> Option<&mut dyn DictionaryMut> {
-        if !self.read_only { Some(self) } else { None }
+        if !self.readonly { Some(self) } else { None }
     }
 }
 
@@ -392,10 +401,10 @@ impl DictionaryMut for SqliteDictionary {
 
     fn add_phrase(
         &mut self,
-        syllables: &dyn SyllableSlice,
+        syllables: &[Syllable],
         phrase: Phrase,
     ) -> Result<(), UpdateDictionaryError> {
-        if self.read_only {
+        if self.readonly {
             return Err(UpdateDictionaryError {
                 source: Some(Box::new(SqliteDictionaryError::ReadOnly)),
             });
@@ -414,12 +423,12 @@ impl DictionaryMut for SqliteDictionary {
 
     fn update_phrase(
         &mut self,
-        syllables: &dyn SyllableSlice,
+        syllables: &[Syllable],
         phrase: Phrase,
         user_freq: u32,
         time: u64,
     ) -> Result<(), UpdateDictionaryError> {
-        if self.read_only {
+        if self.readonly {
             return Err(UpdateDictionaryError {
                 source: Some(Box::new(SqliteDictionaryError::ReadOnly)),
             });
@@ -468,7 +477,7 @@ impl DictionaryMut for SqliteDictionary {
 
     fn remove_phrase(
         &mut self,
-        syllables: &dyn SyllableSlice,
+        syllables: &[Syllable],
         phrase_str: &str,
     ) -> Result<(), UpdateDictionaryError> {
         let syllables_bytes = syllables.to_bytes();
@@ -639,7 +648,7 @@ mod tests {
                 Phrase::new("策士", 9318).with_time(186613),
                 Phrase::new("測試", 9318).with_time(186613)
             ],
-            dict.lookup_all_phrases(
+            dict.lookup(
                 &[
                     syl![Bopomofo::C, Bopomofo::E, Bopomofo::TONE4],
                     syl![Bopomofo::SH, Bopomofo::TONE4],
@@ -650,14 +659,14 @@ mod tests {
     }
 
     #[test]
-    fn open_read_only() {
+    fn open_readonly() {
         let temp_dir = tempdir().expect("Unable to create tempdir");
         let temp_path = temp_dir.path().join("readonly.sqlite3");
         let mut builder = SqliteDictionaryBuilder::new();
         builder.build(&temp_path).expect("Build failure");
 
         let mut dict =
-            SqliteDictionary::open_read_only(&temp_path).expect("Unable to open database");
+            SqliteDictionary::open_readonly(&temp_path).expect("Unable to open database");
         assert_eq!(temp_path.to_path_buf(), dict.path().unwrap());
         assert!(dict.as_dict_mut().is_none());
     }
@@ -676,7 +685,7 @@ mod tests {
         )?;
         assert_eq!(
             vec![Phrase::new("測試", 9900).with_time(0)],
-            dict.lookup_all_phrases(
+            dict.lookup(
                 &[
                     syl![Bopomofo::C, Bopomofo::E, Bopomofo::TONE4],
                     syl![Bopomofo::SH, Bopomofo::TONE4],
@@ -698,7 +707,7 @@ mod tests {
         dict.update_phrase(&syllables, ("測試", 9318).into(), 9900, 0)?;
         assert_eq!(
             vec![Phrase::new("測試", 9900).with_time(0)],
-            dict.lookup_all_phrases(
+            dict.lookup(
                 &[
                     syl![Bopomofo::C, Bopomofo::E, Bopomofo::TONE4],
                     syl![Bopomofo::SH, Bopomofo::TONE4],
