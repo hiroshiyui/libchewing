@@ -23,11 +23,10 @@ use crate::{
         special_symbol_input,
     },
     dictionary::{
-        Dictionary, DictionaryMut, Layered, LookupStrategy, SystemDictionaryLoader,
-        UpdateDictionaryError, UserDictionaryLoader,
+        DEFAULT_DICT_NAMES, Dictionary, DictionaryMut, Layered, LookupStrategy,
+        SystemDictionaryLoader, UpdateDictionaryError, UserDictionaryLoader,
     },
-    input::KeyboardEvent,
-    input::keysym::*,
+    input::{KeyState, KeyboardEvent, keysym::*},
     zhuyin::{Syllable, SyllableSlice},
 };
 
@@ -78,6 +77,7 @@ pub struct EditorOptions {
     pub lookup_strategy: LookupStrategy,
     pub conversion_engine: ConversionEngineKind,
     pub enable_fullwidth_toggle_key: bool,
+    pub sort_candidates_by_frequency: bool,
 }
 
 impl Default for EditorOptions {
@@ -98,6 +98,7 @@ impl Default for EditorOptions {
             // FIXME may be out of sync with the engine used
             conversion_engine: ConversionEngineKind::ChewingEngine,
             enable_fullwidth_toggle_key: true,
+            sort_candidates_by_frequency: false,
         }
     }
 }
@@ -191,9 +192,7 @@ pub(crate) struct SharedState {
 impl Editor {
     pub fn chewing() -> Result<Editor, Box<dyn Error>> {
         let sys_loader = SystemDictionaryLoader::new();
-        let base_dict = sys_loader.load()?;
-        let drop_in_dict = sys_loader.load_drop_in()?;
-        let system_dict = Vec::from_iter(base_dict.into_iter().chain(drop_in_dict));
+        let system_dict = sys_loader.load(DEFAULT_DICT_NAMES)?;
         let user_dict = UserDictionaryLoader::new().load()?;
         let estimate = LaxUserFreqEstimate::max_from(user_dict.as_ref());
         let dict = Layered::new(system_dict, user_dict);
@@ -262,7 +261,7 @@ impl Editor {
     }
     pub fn set_editor_options(&mut self, options: EditorOptions) {
         if self.shared.options.language_mode != options.language_mode {
-            self.shared.syl.clear();
+            self.cancel_entering_syllable();
         }
         self.shared.options = options;
     }
@@ -366,6 +365,11 @@ impl Editor {
         } else {
             Err(EditorError::InvalidState)
         }
+    }
+    pub fn cancel_entering_syllable(&mut self) {
+        self.shared.syl.clear();
+        self.shared.last_key_behavior = EditorKeyBehavior::Absorb;
+        self.state = Box::new(Entering);
     }
     pub fn last_key_behavior(&self) -> EditorKeyBehavior {
         self.shared.last_key_behavior
@@ -612,15 +616,14 @@ impl SharedState {
             self.dict.add_phrase(syllables, (phrase, 1).into())?;
             return Ok(());
         }
-        let phrase_freq = phrases
+        let phrase = phrases
             .iter()
             .find(|p| p.as_str() == phrase)
-            .map(|p| p.freq())
-            .unwrap_or(0);
-        let phrase = (phrase, phrase_freq).into();
+            .cloned()
+            .unwrap_or((phrase, 0).into());
         // TODO: fine tune learning curve
         let max_freq = phrases.iter().map(|p| p.freq()).max().unwrap_or(1);
-        let user_freq = self.estimate.estimate(&phrase, phrase.freq(), max_freq);
+        let user_freq = self.estimate.estimate(&phrase, max_freq);
         let time = self.estimate.now();
 
         let _ = self.dict.update_phrase(syllables, phrase, user_freq, time);
@@ -885,7 +888,7 @@ impl State for Entering {
                 shared.switch_language_mode();
                 self.spin_absorb()
             }
-            code if ev.ksym.is_digit() && ev.is_flag_on(KeyboardEvent::CONTROL_MASK) => {
+            code if ev.ksym.is_digit() && ev.is_state_on(KeyState::Control) => {
                 let n = code.to_digit().unwrap_or_default() as usize;
                 if n == 0 || n == 1 {
                     return self.start_symbol_input(shared);
@@ -945,14 +948,14 @@ impl State for Entering {
                 shared.com.move_cursor_to_beginning();
                 self.spin_absorb()
             }
-            SYM_LEFT if ev.is_flag_on(KeyboardEvent::SHIFT_MASK) => {
+            SYM_LEFT if ev.is_state_on(KeyState::Shift) => {
                 if shared.com.is_beginning_of_buffer() {
                     return self.spin_ignore();
                 }
                 shared.snapshot();
                 self.start_highlighting(shared.cursor() - 1)
             }
-            SYM_RIGHT if ev.is_flag_on(KeyboardEvent::SHIFT_MASK) => {
+            SYM_RIGHT if ev.is_state_on(KeyState::Shift) => {
                 if shared.com.is_end_of_buffer() {
                     return self.spin_ignore();
                 }
@@ -971,7 +974,7 @@ impl State for Entering {
             }
             SYM_UP => self.spin_ignore(),
             SYM_SPACE
-                if ev.is_flag_on(KeyboardEvent::SHIFT_MASK)
+                if ev.is_state_on(KeyState::Shift)
                     && shared.options.enable_fullwidth_toggle_key =>
             {
                 shared.switch_character_form();
@@ -1004,7 +1007,7 @@ impl State for Entering {
                     self.spin_ignore()
                 }
             }
-            _ if ev.is_flag_on(KeyboardEvent::NUMLOCK_MASK) => {
+            _ if ev.ksym.is_keypad() && ev.is_state_on(KeyState::NumLock) => {
                 if shared.com.is_empty() {
                     shared.commit_buffer.clear();
                     shared.commit_buffer.push(ev.ksym.to_unicode());
@@ -1019,7 +1022,7 @@ impl State for Entering {
                     shared.snapshot();
                 }
                 match shared.options.language_mode {
-                    LanguageMode::Chinese if ev.ksym == SYM_GRAVE && ev.state == 0 => {
+                    LanguageMode::Chinese if ev.ksym == SYM_GRAVE && !ev.has_modifiers() => {
                         self.start_symbol_input(shared)
                     }
                     LanguageMode::Chinese if ev.ksym == SYM_SPACE => {
@@ -1048,9 +1051,7 @@ impl State for Entering {
                         }
                     }
                     LanguageMode::Chinese => {
-                        if shared.options.easy_symbol_input
-                            && ev.is_flag_on(KeyboardEvent::SHIFT_MASK)
-                        {
+                        if shared.options.easy_symbol_input && ev.is_state_on(KeyState::Shift) {
                             // Priortize symbol input
                             if let Some(expended) = shared.abbr.find_abbrev(ev.ksym.to_unicode()) {
                                 expended
@@ -1059,7 +1060,7 @@ impl State for Entering {
                                 return self.spin_absorb();
                             }
                         }
-                        if ev.state == 0 && KeyBehavior::Absorb == shared.syl.key_press(ev) {
+                        if !ev.has_modifiers() && KeyBehavior::Absorb == shared.syl.key_press(ev) {
                             return self.start_enter_syllable();
                         }
                         if let Some(symbol) = special_symbol_input(ev.ksym.to_unicode()) {
@@ -1095,30 +1096,35 @@ impl State for Entering {
                         }
                         self.spin_bell()
                     }
-                    LanguageMode::English => match shared.options.character_form {
-                        CharacterForm::Halfwidth => {
-                            if shared.com.is_empty() {
-                                // FIXME we should ignore these keys if pre-edit is empty
-                                shared.commit_buffer.clear();
-                                shared.commit_buffer.push(ev.ksym.to_unicode());
-                                self.spin_commit()
-                            } else {
-                                shared.com.insert(Symbol::from(ev.ksym.to_unicode()));
-                                self.spin_absorb()
+                    LanguageMode::English => {
+                        if !ev.ksym.is_unicode() {
+                            return self.spin_bell();
+                        }
+                        match shared.options.character_form {
+                            CharacterForm::Halfwidth => {
+                                if shared.com.is_empty() {
+                                    // FIXME we should ignore these keys if pre-edit is empty
+                                    shared.commit_buffer.clear();
+                                    shared.commit_buffer.push(ev.ksym.to_unicode());
+                                    self.spin_commit()
+                                } else {
+                                    shared.com.insert(Symbol::from(ev.ksym.to_unicode()));
+                                    self.spin_absorb()
+                                }
+                            }
+                            CharacterForm::Fullwidth => {
+                                let char_ = full_width_symbol_input(ev.ksym.to_unicode()).unwrap();
+                                if shared.com.is_empty() {
+                                    shared.commit_buffer.clear();
+                                    shared.commit_buffer.push(char_);
+                                    self.spin_commit()
+                                } else {
+                                    shared.com.insert(Symbol::from(char_));
+                                    self.spin_absorb()
+                                }
                             }
                         }
-                        CharacterForm::Fullwidth => {
-                            let char_ = full_width_symbol_input(ev.ksym.to_unicode()).unwrap();
-                            if shared.com.is_empty() {
-                                shared.commit_buffer.clear();
-                                shared.commit_buffer.push(char_);
-                                self.spin_commit()
-                            } else {
-                                shared.com.insert(Symbol::from(char_));
-                                self.spin_absorb()
-                            }
-                        }
-                    },
+                    }
                 }
             }
         }
@@ -1368,7 +1374,7 @@ impl Selecting {
 
 impl State for Selecting {
     fn next(&mut self, shared: &mut SharedState, ev: KeyboardEvent) -> Transition {
-        if ev.is_flag_on(KeyboardEvent::CONTROL_MASK) || ev.is_flag_on(KeyboardEvent::SHIFT_MASK) {
+        if ev.is_state_on(KeyState::Control) || ev.is_state_on(KeyState::Shift) {
             return self.spin_bell();
         }
 
@@ -1514,13 +1520,13 @@ impl State for Highlighting {
                 shared.switch_language_mode();
                 self.start_entering()
             }
-            SYM_LEFT if ev.is_flag_on(KeyboardEvent::SHIFT_MASK) => {
+            SYM_LEFT if ev.is_state_on(KeyState::Shift) => {
                 if self.moving_cursor != 0 {
                     self.moving_cursor -= 1;
                 }
                 self.spin_absorb()
             }
-            SYM_RIGHT if ev.is_flag_on(KeyboardEvent::SHIFT_MASK) => {
+            SYM_RIGHT if ev.is_state_on(KeyState::Shift) => {
                 if self.moving_cursor != shared.com.len() {
                     self.moving_cursor += 1;
                 }
@@ -1553,7 +1559,7 @@ mod tests {
     use crate::{
         conversion::ChewingEngine,
         dictionary::{Layered, TrieBuf},
-        editor::{EditorKeyBehavior, SymbolSelector, abbrev::AbbrevTable, estimate},
+        editor::{EditorKeyBehavior, EditorOptions, SymbolSelector, abbrev::AbbrevTable, estimate},
         input::{
             KeyboardEvent, keycode,
             keymap::{QWERTY_MAP, map_ascii},
@@ -1565,11 +1571,11 @@ mod tests {
 
     use super::{BasicEditor, Editor};
 
-    const CAPSLOCK_EVENT: KeyboardEvent = KeyboardEvent {
-        code: keycode::KEY_CAPSLOCK,
-        ksym: keysym::SYM_CAPSLOCK,
-        state: KeyboardEvent::CAPSLOCK_MASK,
-    };
+    const CAPSLOCK_EVENT: KeyboardEvent = KeyboardEvent::builder()
+        .code(keycode::KEY_CAPSLOCK)
+        .ksym(keysym::SYM_CAPSLOCK)
+        .caps_lock_if(true)
+        .build();
 
     #[test]
     fn editing_mode_input_bopomofo() {
@@ -1634,6 +1640,102 @@ mod tests {
         );
         assert!(editor.syllable_buffer().is_empty());
         assert_eq!("冊", editor.display());
+    }
+
+    #[test]
+    fn editing_mode_input_bopomofo_select() {
+        let dict = TrieBuf::from([(
+            vec![crate::syl![Bopomofo::C, Bopomofo::E, Bopomofo::TONE4]],
+            vec![("冊", 100), ("測", 200)],
+        )]);
+        let dict = Layered::new(vec![Box::new(dict)], Box::new(TrieBuf::new_in_memory()));
+        let conversion_engine = Box::new(ChewingEngine::new());
+        let estimate = LaxUserFreqEstimate::new(0);
+        let abbrev = AbbrevTable::new();
+        let sym_sel = SymbolSelector::default();
+        let mut editor = Editor::new(conversion_engine, dict, estimate, abbrev, sym_sel);
+
+        editor.set_editor_options(EditorOptions {
+            sort_candidates_by_frequency: false,
+            ..Default::default()
+        });
+
+        editor.process_keyevent(
+            KeyboardEvent::builder()
+                .code(keycode::KEY_H)
+                .ksym(keysym::SYM_LOWER_H)
+                .build(),
+        );
+        editor.process_keyevent(
+            KeyboardEvent::builder()
+                .code(keycode::KEY_K)
+                .ksym(keysym::SYM_LOWER_H)
+                .build(),
+        );
+        editor.process_keyevent(
+            KeyboardEvent::builder()
+                .code(keycode::KEY_4)
+                .ksym(keysym::SYM_4)
+                .build(),
+        );
+        editor.process_keyevent(
+            KeyboardEvent::builder()
+                .code(keycode::KEY_DOWN)
+                .ksym(keysym::SYM_DOWN)
+                .build(),
+        );
+        let candidates = editor
+            .all_candidates()
+            .expect("should be in selection mode");
+        assert_eq!(vec!["冊", "測"], candidates);
+    }
+
+    #[test]
+    fn editing_mode_input_bopomofo_select_sorted() {
+        let dict = TrieBuf::from([(
+            vec![crate::syl![Bopomofo::C, Bopomofo::E, Bopomofo::TONE4]],
+            vec![("冊", 100), ("測", 200)],
+        )]);
+        let dict = Layered::new(vec![Box::new(dict)], Box::new(TrieBuf::new_in_memory()));
+        let conversion_engine = Box::new(ChewingEngine::new());
+        let estimate = LaxUserFreqEstimate::new(0);
+        let abbrev = AbbrevTable::new();
+        let sym_sel = SymbolSelector::default();
+        let mut editor = Editor::new(conversion_engine, dict, estimate, abbrev, sym_sel);
+
+        editor.set_editor_options(EditorOptions {
+            sort_candidates_by_frequency: true,
+            ..Default::default()
+        });
+
+        editor.process_keyevent(
+            KeyboardEvent::builder()
+                .code(keycode::KEY_H)
+                .ksym(keysym::SYM_LOWER_H)
+                .build(),
+        );
+        editor.process_keyevent(
+            KeyboardEvent::builder()
+                .code(keycode::KEY_K)
+                .ksym(keysym::SYM_LOWER_H)
+                .build(),
+        );
+        editor.process_keyevent(
+            KeyboardEvent::builder()
+                .code(keycode::KEY_4)
+                .ksym(keysym::SYM_4)
+                .build(),
+        );
+        editor.process_keyevent(
+            KeyboardEvent::builder()
+                .code(keycode::KEY_DOWN)
+                .ksym(keysym::SYM_DOWN)
+                .build(),
+        );
+        let candidates = editor
+            .all_candidates()
+            .expect("should be in selection mode");
+        assert_eq!(vec!["測", "冊"], candidates);
     }
 
     #[test]

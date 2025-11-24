@@ -11,7 +11,8 @@ use std::{
 use chewing::{
     conversion::{ChewingEngine, FuzzyChewingEngine, Interval, SimpleEngine, Symbol},
     dictionary::{
-        Dictionary, Layered, LookupStrategy, SystemDictionaryLoader, Trie, UserDictionaryLoader,
+        DEFAULT_DICT_NAMES, Dictionary, Layered, LookupStrategy, SystemDictionaryLoader, Trie,
+        UserDictionaryLoader,
     },
     editor::{
         AbbrevTable, BasicEditor, CharacterForm, ConversionEngineKind, Editor, EditorKeyBehavior,
@@ -131,6 +132,42 @@ pub unsafe extern "C" fn chewing_new2(
     logger: Option<unsafe extern "C" fn(data: *mut c_void, level: c_int, fmt: *const c_char, ...)>,
     loggerdata: *mut c_void,
 ) -> *mut ChewingContext {
+    unsafe {
+        chewing_new3(
+            syspath,
+            userpath,
+            c"word.dat,tsi.dat".as_ptr(),
+            logger,
+            loggerdata,
+        )
+    }
+}
+
+/// Creates a new instance of the Chewing IM.
+///
+/// The `syspath` is the directory path to system dictionary. The `userpath`
+/// is file path to user dictionary. User shall have enough permission to
+/// update this file. The `enabled_dicts` is a comma separated list of
+/// dictionary file names.
+///
+/// The logger and loggerdata is logger function and its data.
+///
+/// All parameters will be default if set to NULL.
+///
+/// The return value is a pointer to the new Chewing IM instance. See also
+/// the [chewing_new], [chewing_delete] function.
+///
+/// # Safety
+///
+/// This function should be called with valid pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn chewing_new3(
+    syspath: *const c_char,
+    userpath: *const c_char,
+    enabled_dicts: *const c_char,
+    logger: Option<unsafe extern "C" fn(data: *mut c_void, level: c_int, fmt: *const c_char, ...)>,
+    loggerdata: *mut c_void,
+) -> *mut ChewingContext {
     LOGGER.init();
     let _ = log::set_logger(&LOGGER);
     log::set_max_level(log::LevelFilter::Trace);
@@ -138,12 +175,21 @@ pub unsafe extern "C" fn chewing_new2(
         LOGGER.set(Some((logger, loggerdata)));
     }
     let mut sys_loader = SystemDictionaryLoader::new();
+    let mut dict_names: Vec<String> = DEFAULT_DICT_NAMES.iter().map(|&n| n.to_owned()).collect();
     if !syspath.is_null() {
         if let Ok(search_path) = unsafe { CStr::from_ptr(syspath).to_str() } {
             sys_loader = sys_loader.sys_path(search_path);
         }
     }
-    let dictionaries = match sys_loader.load() {
+    if !enabled_dicts.is_null() {
+        if let Ok(enabled_dicts) = unsafe { CStr::from_ptr(enabled_dicts).to_str() } {
+            dict_names = enabled_dicts
+                .split(",")
+                .map(|n| n.trim().to_owned())
+                .collect();
+        }
+    }
+    let system_dicts = match sys_loader.load(&dict_names) {
         Ok(d) => d,
         Err(e) => {
             let builtin = Trie::new(&include_bytes!("../data/mini.dat")[..]);
@@ -154,7 +200,6 @@ pub unsafe extern "C" fn chewing_new2(
             vec![Box::new(builtin.unwrap()) as Box<dyn Dictionary>]
         }
     };
-    let drop_in_dicts = sys_loader.load_drop_in().unwrap_or_default();
     let abbrev = sys_loader.load_abbrev();
     let abbrev = match abbrev {
         Ok(abbr) => abbr,
@@ -190,7 +235,6 @@ pub unsafe extern "C" fn chewing_new2(
 
     let estimate = LaxUserFreqEstimate::max_from(user_dictionary.as_ref());
 
-    let system_dicts = Vec::from_iter(dictionaries.into_iter().chain(drop_in_dicts));
     let dict = Layered::new(system_dicts, user_dictionary);
     let conversion_engine = Box::new(ChewingEngine::new());
     let kb_compat = KeyboardLayoutCompat::Default;
@@ -225,6 +269,17 @@ pub unsafe extern "C" fn chewing_new2(
     let ptr = Box::into_raw(context);
     info!("Initialized context {ptr:?}");
     ptr
+}
+
+/// Returns the default comma separated dictionary names.
+///
+/// This function should be used with [`chewing_new3`].
+///
+/// The return value is a const pointer to a character string. The pointer
+/// don't need to be freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn chewing_get_defaultDictionaryNames() -> *const c_char {
+    c"word.dat,tsi.dat".as_ptr()
 }
 
 /// Releases the resources used by the given Chewing IM instance.
@@ -362,6 +417,7 @@ pub unsafe extern "C" fn chewing_config_has_option(
             | "chewing.space_is_select_key"
             | "chewing.conversion_engine"
             | "chewing.enable_fullwidth_toggle_key"
+            | "chewing.sort_candidates_by_frequency"
     );
 
     ret as c_int
@@ -376,6 +432,11 @@ pub unsafe extern "C" fn chewing_config_get_int(
     name: *const c_char,
 ) -> c_int {
     let ctx = as_ref_or_return!(ctx, ERROR);
+
+    if unsafe { chewing_config_has_option(ctx, name) } != 1 {
+        return ERROR;
+    }
+
     let cstr = unsafe { CStr::from_ptr(name) };
     let name = cstr.to_string_lossy();
 
@@ -408,6 +469,7 @@ pub unsafe extern "C" fn chewing_config_get_int(
             ConversionEngineKind::FuzzyChewingEngine => FUZZY_CHEWING_CONVERSION_ENGINE,
         },
         "chewing.enable_fullwidth_toggle_key" => option.enable_fullwidth_toggle_key as c_int,
+        "chewing.sort_candidates_by_frequency" => option.sort_candidates_by_frequency as c_int,
         _ => ERROR,
     }
 }
@@ -422,6 +484,11 @@ pub unsafe extern "C" fn chewing_config_set_int(
     value: c_int,
 ) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+
+    if unsafe { chewing_config_has_option(ctx, name) } != 1 {
+        return ERROR;
+    }
+
     let cstr = unsafe { CStr::from_ptr(name) };
     let name = cstr.to_string_lossy();
 
@@ -523,6 +590,10 @@ pub unsafe extern "C" fn chewing_config_set_int(
             ensure_bool!(value);
             options.enable_fullwidth_toggle_key = value > 0;
         }
+        "chewing.sort_candidates_by_frequency" => {
+            ensure_bool!(value);
+            options.sort_candidates_by_frequency = value > 0;
+        }
         _ => return ERROR,
     };
 
@@ -541,6 +612,11 @@ pub unsafe extern "C" fn chewing_config_get_str(
     value: *mut *mut c_char,
 ) -> c_int {
     let ctx = as_ref_or_return!(ctx, ERROR);
+
+    if unsafe { chewing_config_has_option(ctx, name) } != 1 {
+        return ERROR;
+    }
+
     let cstr = unsafe { CStr::from_ptr(name) };
     let name = cstr.to_string_lossy();
 
@@ -582,17 +658,22 @@ pub unsafe extern "C" fn chewing_config_set_str(
     value: *const c_char,
 ) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+
+    if unsafe { chewing_config_has_option(ctx, name) } != 1 {
+        return ERROR;
+    }
+
     let cstr = unsafe { CStr::from_ptr(name) };
     let name = cstr.to_string_lossy();
     let cstr = unsafe { CStr::from_ptr(value) };
-    let string = cstr.to_string_lossy();
+    let value = cstr.to_string_lossy();
 
     let _option = &mut ctx.editor.editor_options();
 
     match name.as_ref() {
         "chewing.keyboard_type" => {
             use KeyboardLayoutCompat as KB;
-            let kb_compat = match string.parse() {
+            let kb_compat = match value.parse() {
                 Ok(kbtype) => kbtype,
                 Err(_) => return ERROR,
             };
@@ -620,11 +701,11 @@ pub unsafe extern "C" fn chewing_config_set_str(
             ctx.editor.set_syllable_editor(syl);
         }
         "chewing.selection_keys" => {
-            if string.len() != 10 {
+            if value.len() != 10 {
                 return ERROR;
             }
             let mut sel_keys = [0_i32; MAX_SELKEY];
-            string
+            value
                 .chars()
                 .enumerate()
                 .for_each(|(i, key)| sel_keys[i] = key as i32);
@@ -1708,11 +1789,49 @@ pub unsafe extern "C" fn chewing_handle_KeyboardEvent(
 ) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
-    ctx.editor.process_keyevent(KeyboardEvent {
-        code: Keycode(code),
-        ksym: Keysym(ksym),
-        state,
-    });
+    // XXX hack for selkey
+    let key = if ctx.editor.is_selecting() {
+        match ctx
+            .sel_keys
+            .0
+            .iter()
+            .position(|&it| it == Keysym(ksym).to_unicode() as i32)
+        {
+            Some(idx) => {
+                let key = match idx {
+                    0 => b'1',
+                    1 => b'2',
+                    2 => b'3',
+                    3 => b'4',
+                    4 => b'5',
+                    5 => b'6',
+                    6 => b'7',
+                    7 => b'8',
+                    8 => b'9',
+                    9 => b'0',
+                    _ => b'0',
+                };
+                Some(key as c_int)
+            }
+            None => None,
+        }
+    } else {
+        None
+    };
+
+    let evt = if let Some(key) = key {
+        let mut evt = map_ascii(&ctx.keymap, key as u8);
+        evt.state = state;
+        evt
+    } else {
+        KeyboardEvent {
+            code: Keycode(code),
+            ksym: Keysym(ksym),
+            state,
+        }
+    };
+
+    ctx.editor.process_keyevent(evt);
     OK
 }
 
@@ -1827,11 +1946,13 @@ pub unsafe extern "C" fn chewing_handle_Tab(ctx: *mut ChewingContext) -> c_int {
 pub unsafe extern "C" fn chewing_handle_ShiftLeft(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
-    ctx.editor.process_keyevent(KeyboardEvent {
-        code: KEY_LEFT,
-        ksym: SYM_LEFT,
-        state: KeyboardEvent::SHIFT_MASK,
-    });
+    ctx.editor.process_keyevent(
+        KeyboardEvent::builder()
+            .code(KEY_LEFT)
+            .ksym(SYM_LEFT)
+            .shift()
+            .build(),
+    );
     OK
 }
 
@@ -1861,11 +1982,13 @@ pub unsafe extern "C" fn chewing_handle_Left(ctx: *mut ChewingContext) -> c_int 
 pub unsafe extern "C" fn chewing_handle_ShiftRight(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
-    ctx.editor.process_keyevent(KeyboardEvent {
-        code: KEY_RIGHT,
-        ksym: SYM_RIGHT,
-        state: KeyboardEvent::SHIFT_MASK,
-    });
+    ctx.editor.process_keyevent(
+        KeyboardEvent::builder()
+            .code(KEY_RIGHT)
+            .ksym(SYM_RIGHT)
+            .shift()
+            .build(),
+    );
     OK
 }
 
@@ -2002,11 +2125,13 @@ pub unsafe extern "C" fn chewing_handle_Down(ctx: *mut ChewingContext) -> c_int 
 pub unsafe extern "C" fn chewing_handle_Capslock(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
-    ctx.editor.process_keyevent(KeyboardEvent {
-        code: KEY_CAPSLOCK,
-        ksym: SYM_CAPSLOCK,
-        state: KeyboardEvent::CAPSLOCK_MASK,
-    });
+    ctx.editor.process_keyevent(
+        KeyboardEvent::builder()
+            .code(KEY_CAPSLOCK)
+            .ksym(SYM_CAPSLOCK)
+            .caps_lock()
+            .build(),
+    );
     OK
 }
 
@@ -2020,31 +2145,6 @@ pub unsafe extern "C" fn chewing_handle_Capslock(ctx: *mut ChewingContext) -> c_
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_Default(ctx: *mut ChewingContext, key: c_int) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
-
-    // XXX hack for selkey
-    let key = if ctx.editor.is_selecting() {
-        match ctx.sel_keys.0.iter().position(|&it| it == key) {
-            Some(idx) => {
-                let key = match idx {
-                    0 => b'1',
-                    1 => b'2',
-                    2 => b'3',
-                    3 => b'4',
-                    4 => b'5',
-                    5 => b'6',
-                    6 => b'7',
-                    7 => b'8',
-                    8 => b'9',
-                    9 => b'0',
-                    _ => b'0',
-                };
-                key as c_int
-            }
-            None => key,
-        }
-    } else {
-        key
-    };
 
     let evt = map_ascii(&ctx.keymap, key as u8);
 
@@ -2077,11 +2177,13 @@ pub unsafe extern "C" fn chewing_handle_CtrlNum(ctx: *mut ChewingContext, key: c
         _ => return -1,
     };
 
-    ctx.editor.process_keyevent(KeyboardEvent {
-        code,
-        ksym,
-        state: KeyboardEvent::CONTROL_MASK,
-    });
+    ctx.editor.process_keyevent(
+        KeyboardEvent::builder()
+            .code(code)
+            .ksym(ksym)
+            .control()
+            .build(),
+    );
     OK
 }
 
@@ -2094,11 +2196,13 @@ pub unsafe extern "C" fn chewing_handle_CtrlNum(ctx: *mut ChewingContext, key: c
 pub unsafe extern "C" fn chewing_handle_ShiftSpace(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
 
-    ctx.editor.process_keyevent(KeyboardEvent {
-        code: KEY_SPACE,
-        ksym: SYM_SPACE,
-        state: KeyboardEvent::SHIFT_MASK,
-    });
+    ctx.editor.process_keyevent(
+        KeyboardEvent::builder()
+            .code(KEY_SPACE)
+            .ksym(SYM_SPACE)
+            .shift()
+            .build(),
+    );
     OK
 }
 
@@ -2146,11 +2250,13 @@ pub unsafe extern "C" fn chewing_handle_Numlock(ctx: *mut ChewingContext, key: c
         _ => return -1,
     };
 
-    ctx.editor.process_keyevent(KeyboardEvent {
-        code,
-        ksym,
-        state: KeyboardEvent::NUMLOCK_MASK,
-    });
+    ctx.editor.process_keyevent(
+        KeyboardEvent::builder()
+            .code(code)
+            .ksym(ksym)
+            .num_lock_if(true)
+            .build(),
+    );
     OK
 }
 

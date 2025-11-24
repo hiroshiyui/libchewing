@@ -675,7 +675,7 @@ void test_new2_syspath_error()
     printf("#\n# %s\n#\n", __func__);
 
     ctx = chewing_new2("NoSuchPath", NULL, NULL, NULL);
-    ok(ctx != NULL, "chewing_new2 returns `%#p' shall be `%#p'", ctx, NULL);
+    ok(ctx != NULL, "chewing_new2 returns `%#p' shall not be `%#p'", ctx, NULL);
 
     chewing_delete(ctx);
 }
@@ -726,6 +726,36 @@ void test_new2()
     test_new2_userpath();
 }
 
+void test_new3_default_names()
+{
+    ChewingContext *ctx;
+
+    printf("#\n# %s\n#\n", __func__);
+
+    ctx = chewing_new3(NULL, NULL, chewing_get_defaultDictionaryNames(), NULL, NULL);
+    ok(ctx != NULL, "chewing_new3 returns `%#p' shall not be `%#p'", ctx, NULL);
+
+    chewing_delete(ctx);
+}
+
+void test_new3_invalid_dict_names()
+{
+    ChewingContext *ctx;
+
+    printf("#\n# %s\n#\n", __func__);
+
+    ctx = chewing_new3(NULL, NULL, "unknown.dat", NULL, NULL);
+    ok(ctx != NULL, "chewing_new3 returns `%#p' shall not be `%#p'", ctx, NULL);
+
+    chewing_delete(ctx);
+}
+
+void test_new3()
+{
+    test_new3_default_names();
+    test_new3_invalid_dict_names();
+}
+
 void test_runtime_version()
 {
     char buf[256];
@@ -737,23 +767,8 @@ void test_runtime_version()
 
     ok(version != NULL, "chewing_version returns a version string");
 
-    sprintf(buf, "%d.%d.%d%s", major, minor, patch, extra);
+    sprintf(buf, "%d.%d.%d-%s", major, minor, patch, extra);
     ok(strcmp(buf, version) == 0, "chewing_version can be created from components");
-}
-
-void test_dictionary_d()
-{
-    ChewingContext *ctx;
-
-    ctx = chewing_new2(TEST_DATA_DIR, NULL, NULL, NULL);
-    start_testcase(ctx);
-
-    ok(ctx != NULL, "chewing_new2 returns `%#p' shall not be `%#p'", ctx, NULL);
-
-    type_keystroke_by_string(ctx, "k6j94<E>");
-    ok_commit_buffer(ctx, "額外");
-
-    chewing_delete(ctx);
 }
 
 int main(int argc, char *argv[])
@@ -782,10 +797,9 @@ int main(int argc, char *argv[])
     test_deprecated();
 
     test_new2();
+    test_new3();
 
     test_runtime_version();
-
-    test_dictionary_d();
 
     return exit_status();
 }

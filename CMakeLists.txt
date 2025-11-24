@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24.0...3.31.6)
 project(libchewing LANGUAGES C)
 
-set(CMAKE_PROJECT_VERSION 0.10.3)
+set(CMAKE_PROJECT_VERSION 0.11.0-alpha.5)
 
 find_package(Git)
 if(Git_FOUND)
@@ -72,12 +72,16 @@ if(NOT Corrosion_FOUND)
 endif()
 
 corrosion_import_crate(MANIFEST_PATH Cargo.toml CRATES chewing_capi)
-corrosion_import_crate(MANIFEST_PATH Cargo.toml CRATES chewing_testhelper)
+if(BUILD_TESTING)
+    corrosion_import_crate(MANIFEST_PATH Cargo.toml CRATES chewing_testhelper)
+endif()
 corrosion_import_crate(MANIFEST_PATH Cargo.toml CRATES chewing-cli)
 
 if(WITH_SQLITE3)
     corrosion_set_features(chewing_capi FEATURES sqlite)
-    corrosion_set_features(chewing_testhelper FEATURES sqlite)
+    if(BUILD_TESTING)
+        corrosion_set_features(chewing_testhelper FEATURES sqlite)
+    endif()
     corrosion_set_features(chewing-cli FEATURES sqlite)
 endif()
 
@@ -89,7 +93,9 @@ endif()
 if(CMAKE_SYSTEM MATCHES "Windows")
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
     corrosion_add_target_rustflags(chewing_capi -Ctarget-feature=+crt-static)
-    corrosion_add_target_rustflags(chewing_testhelper -Ctarget-feature=+crt-static)
+    if(BUILD_TESTING)
+        corrosion_add_target_rustflags(chewing_testhelper -Ctarget-feature=+crt-static)
+    endif()
     corrosion_add_target_rustflags(chewing-cli -Ctarget-feature=+crt-static)
     if(VCPKG_TARGET_TRIPLET)
         corrosion_set_env_vars(chewing-cli VCPKGRS_TRIPLET=${VCPKG_TARGET_TRIPLET})
@@ -170,9 +176,6 @@ endif()
 
 add_library(libchewing ${ALL_INC} capi/src/chewing.c)
 set_target_properties(libchewing PROPERTIES LINKER_LANGUAGE C)
-target_compile_definitions(libchewing PRIVATE
-    CHEWING_DATADIR=\"${CMAKE_INSTALL_FULL_DATADIR}/libchewing\"
-)
 target_include_directories(libchewing
     PUBLIC
         $<BUILD_INTERFACE:${INC_DIR}>
