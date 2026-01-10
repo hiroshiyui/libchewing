@@ -9,12 +9,11 @@ use std::{
 
 use log::{error, info};
 
-use crate::zhuyin::Syllable;
-
 use super::{
-    BuildDictionaryError, Dictionary, DictionaryBuilder, DictionaryInfo, DictionaryMut, Entries,
-    LookupStrategy, Phrase, Trie, TrieBuilder, UpdateDictionaryError,
+    BuildDictionaryError, Dictionary, DictionaryBuilder, DictionaryInfo, Entries, LookupStrategy,
+    Phrase, Trie, TrieBuilder, UpdateDictionaryError,
 };
+use crate::zhuyin::Syllable;
 
 /// A mutable dictionary backed by a Trie and a BTreeMap.
 #[derive(Debug)]
@@ -92,7 +91,7 @@ impl TrieBuf {
             .btree
             .range(min_key..max_key)
             .map(|(key, value)| Phrase {
-                phrase: key.1.clone().into(),
+                text: key.1.clone().into(),
                 freq: value.0,
                 last_used: Some(value.1),
             });
@@ -113,7 +112,7 @@ impl TrieBuf {
                 (
                     key.0.clone().into_owned(),
                     Phrase {
-                        phrase: key.1.clone().into(),
+                        text: key.1.clone().into(),
                         freq: value.0,
                         last_used: Some(value.1),
                     },
@@ -165,7 +164,7 @@ impl TrieBuf {
         self.btree.insert(
             (
                 Cow::from(syllables.to_vec()),
-                Cow::from(phrase.phrase.into_string()),
+                Cow::from(phrase.text.into_string()),
             ),
             (phrase.freq, phrase.last_used.unwrap_or_default()),
         );
@@ -184,7 +183,7 @@ impl TrieBuf {
         self.btree.insert(
             (
                 Cow::from(syllables.to_vec()),
-                Cow::from(phrase.phrase.into_string()),
+                Cow::from(phrase.text.into_string()),
             ),
             (user_freq, time),
         );
@@ -305,12 +304,6 @@ impl Dictionary for TrieBuf {
         self.trie.as_ref()?.path()
     }
 
-    fn as_dict_mut(&mut self) -> Option<&mut dyn DictionaryMut> {
-        Some(self)
-    }
-}
-
-impl DictionaryMut for TrieBuf {
     fn reopen(&mut self) -> Result<(), UpdateDictionaryError> {
         self.sync()?;
         Ok(())
@@ -374,13 +367,12 @@ impl Drop for TrieBuf {
 mod tests {
     use std::error::Error;
 
+    use super::{Dictionary, TrieBuf};
     use crate::{
-        dictionary::{DictionaryMut, LookupStrategy, Phrase},
+        dictionary::{LookupStrategy, Phrase},
         syl,
         zhuyin::Bopomofo::*,
     };
-
-    use super::{Dictionary, TrieBuf};
 
     #[test]
     fn create_new_dictionary_in_memory_and_query() -> Result<(), Box<dyn Error>> {

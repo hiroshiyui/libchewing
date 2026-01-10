@@ -1,3 +1,12 @@
+use std::{
+    any::Any,
+    error::Error,
+    fmt::Display,
+    fs::{self, File},
+    io::{BufRead, BufReader},
+    path::Path,
+};
+
 #[cfg(not(feature = "sqlite"))]
 use anyhow::bail;
 use anyhow::{Context, Result, anyhow};
@@ -6,13 +15,6 @@ use chewing::dictionary::SqliteDictionaryBuilder;
 use chewing::{
     dictionary::{DictionaryBuilder, DictionaryInfo, TrieBuilder},
     zhuyin::{Bopomofo, Syllable},
-};
-use std::{
-    error::Error,
-    fmt::Display,
-    fs::{self, File},
-    io::{BufRead, BufReader},
-    path::Path,
 };
 
 use crate::flags;
@@ -155,7 +157,7 @@ pub(crate) fn run(args: flags::InitDatabase) -> Result<()> {
 
     builder.build(path)?;
 
-    if let Some(trie_builder) = builder.as_any().downcast_ref::<TrieBuilder>() {
+    if let Some(trie_builder) = (builder as Box<dyn Any>).downcast_ref::<TrieBuilder>() {
         let stats = trie_builder.statistics();
         eprintln!("== Trie Dictionary Statistics ==");
         eprintln!("Name                 : {}", info.name);

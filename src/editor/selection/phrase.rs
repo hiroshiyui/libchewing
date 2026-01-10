@@ -254,21 +254,20 @@ impl PhraseSelector {
             start: self.begin,
             end: self.end,
             is_phrase: true,
-            str: phrase.into(),
+            text: phrase.into(),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::PhraseSelector;
     use crate::{
         conversion::{Composition, Interval, Symbol},
         dictionary::{LookupStrategy, TrieBuf},
         syl,
         zhuyin::Bopomofo::*,
     };
-
-    use super::PhraseSelector;
 
     #[test]
     fn init_when_cursor_end_of_buffer_syllable() {
@@ -398,7 +397,7 @@ mod tests {
             start: 0,
             end: 1,
             is_phrase: true,
-            str: "冊".into(),
+            text: "冊".into(),
         });
         let sel = PhraseSelector {
             begin: 0,

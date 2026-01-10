@@ -1,62 +1,65 @@
 use std::{
+    cell::RefCell,
     ffi::{CString, c_char, c_int, c_void},
-    sync::{
-        Mutex,
-        atomic::{AtomicPtr, Ordering::Relaxed},
-    },
 };
 
-use log::{Level, Log, Metadata, Record};
+use env_logger::Logger as EnvLogger;
+use log::{Level, LevelFilter, Log, Metadata, Record, SetLoggerError};
 
-use super::setup::{
+use crate::setup::{
     CHEWING_LOG_DEBUG, CHEWING_LOG_ERROR, CHEWING_LOG_INFO, CHEWING_LOG_VERBOSE, CHEWING_LOG_WARN,
 };
 
-type ExternLoggerFn =
+thread_local! {
+    static CTX_LOGGER: RefCell<Vec<(ExternLoggerFn, *mut c_void)>> = const { RefCell::new(vec![]) };
+}
+
+pub(crate) type ExternLoggerFn =
     unsafe extern "C" fn(data: *mut c_void, level: c_int, fmt: *const c_char, arg: ...);
 
 pub(crate) struct ChewingLogger {
-    env_logger: Mutex<Option<env_logger::Logger>>,
-    logger: Mutex<Option<(ExternLoggerFn, AtomicPtr<c_void>)>>,
+    env_logger: EnvLogger,
+}
+
+pub(crate) struct ChewingLoggerGuard;
+
+pub(crate) fn init() -> Result<(), SetLoggerError> {
+    log::set_boxed_logger(Box::new(ChewingLogger::new()))
+        .map(|()| log::set_max_level(LevelFilter::Trace))
+}
+
+pub(crate) fn init_scoped_logging(
+    logger_fn: Option<ExternLoggerFn>,
+    data: *mut c_void,
+) -> ChewingLoggerGuard {
+    if let Some(logger_fn) = logger_fn {
+        CTX_LOGGER.with_borrow_mut(|ctx_logger| ctx_logger.push((logger_fn, data)));
+    }
+    ChewingLoggerGuard
 }
 
 impl ChewingLogger {
-    pub(crate) const fn new() -> ChewingLogger {
+    pub(crate) fn new() -> ChewingLogger {
         ChewingLogger {
-            env_logger: Mutex::new(None),
-            logger: Mutex::new(None),
+            env_logger: EnvLogger::from_default_env(),
         }
     }
-    pub(crate) fn init(&self) {
-        if let Ok(mut prev) = self.env_logger.lock() {
-            *prev = Some(env_logger::Logger::from_default_env());
-        }
-    }
-    pub(crate) fn set(&self, logger: Option<(ExternLoggerFn, *mut c_void)>) {
-        if let Ok(mut prev) = self.logger.lock() {
-            *prev = logger.map(|(l, d)| (l, d.into()));
-        }
+}
+
+impl Drop for ChewingLoggerGuard {
+    fn drop(&mut self) {
+        CTX_LOGGER.with_borrow_mut(|ctx_logger| ctx_logger.pop());
     }
 }
 
 impl Log for ChewingLogger {
-    fn enabled(&self, metadata: &Metadata<'_>) -> bool {
-        if let Ok(logger) = self.logger.lock() {
-            if logger.is_some() && metadata.level() <= Level::Debug {
-                return true;
-            }
-        }
-        if let Ok(logger) = self.env_logger.lock() {
-            if let Some(el) = logger.as_ref() {
-                return el.enabled(metadata);
-            }
-        }
-        false
+    fn enabled(&self, metadata: &Metadata) -> bool {
+        self.env_logger.enabled(metadata)
     }
-
-    fn log(&self, record: &Record<'_>) {
-        if let Ok(logger) = self.logger.lock() {
-            if let Some((logger, logger_data)) = logger.as_ref() {
+    fn log(&self, record: &Record) {
+        self.env_logger.log(record);
+        CTX_LOGGER.with_borrow(|ctx_logger| {
+            if let Some((logger_fn, data)) = ctx_logger.last() {
                 let fmt = format!(
                     "[{}:{} {}] {}",
                     record.file().unwrap_or("unknown"),
@@ -66,24 +69,19 @@ impl Log for ChewingLogger {
                 );
                 let fmt_cstring = CString::new(fmt).unwrap();
                 unsafe {
-                    logger(
-                        logger_data.load(Relaxed),
+                    logger_fn(
+                        *data,
                         as_chewing_level(record.level()),
                         c"%s\n".as_ptr().cast(),
                         fmt_cstring.as_ptr(),
                     )
                 }
-                return;
             }
-        }
-        if let Ok(logger) = self.env_logger.lock() {
-            if let Some(el) = logger.as_ref() {
-                el.log(record);
-            }
-        }
+        })
     }
-
-    fn flush(&self) {}
+    fn flush(&self) {
+        self.env_logger.flush();
+    }
 }
 
 fn as_chewing_level(level: Level) -> c_int {

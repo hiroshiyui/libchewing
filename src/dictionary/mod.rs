@@ -10,17 +10,16 @@ use std::{
     path::Path,
 };
 
-use crate::zhuyin::Syllable;
-
-pub use layered::Layered;
-pub use loader::{
+pub use self::layered::Layered;
+pub use self::loader::{
     DEFAULT_DICT_NAMES, LoadDictionaryError, SingleDictionaryLoader, SystemDictionaryLoader,
     UserDictionaryLoader,
 };
 #[cfg(feature = "sqlite")]
-pub use sqlite::{SqliteDictionary, SqliteDictionaryBuilder, SqliteDictionaryError};
-pub use trie::{Trie, TrieBuilder, TrieOpenOptions, TrieStatistics};
-pub use trie_buf::TrieBuf;
+pub use self::sqlite::{SqliteDictionary, SqliteDictionaryBuilder, SqliteDictionaryError};
+pub use self::trie::{Trie, TrieBuilder, TrieOpenOptions, TrieStatistics};
+pub use self::trie_buf::TrieBuf;
+use crate::zhuyin::Syllable;
 
 mod layered;
 mod loader;
@@ -126,7 +125,7 @@ pub struct DictionaryInfo {
 /// ```
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Phrase {
-    phrase: Box<str>,
+    text: Box<str>,
     freq: u32,
     last_used: Option<u64>,
 }
@@ -146,7 +145,7 @@ impl Phrase {
         S: Into<Box<str>>,
     {
         Phrase {
-            phrase: phrase.into(),
+            text: phrase.into(),
             freq,
             last_used: None,
         }
@@ -188,7 +187,7 @@ impl Phrase {
     /// assert_eq!("詞", phrase.as_str());
     /// ```
     pub fn as_str(&self) -> &str {
-        self.phrase.borrow()
+        self.text.borrow()
     }
 }
 
@@ -208,7 +207,7 @@ impl Ord for Phrase {
             Ordering::Equal => {}
             ord => return ord,
         }
-        self.phrase.cmp(&other.phrase)
+        self.text.cmp(&other.text)
     }
 }
 
@@ -220,19 +219,19 @@ impl AsRef<str> for Phrase {
 
 impl From<Phrase> for String {
     fn from(phrase: Phrase) -> Self {
-        phrase.phrase.into_string()
+        phrase.text.into_string()
     }
 }
 
 impl From<Phrase> for Box<str> {
     fn from(phrase: Phrase) -> Self {
-        phrase.phrase
+        phrase.text
     }
 }
 
 impl From<Phrase> for (String, u32) {
     fn from(phrase: Phrase) -> Self {
-        (phrase.phrase.into_string(), phrase.freq)
+        (phrase.text.into_string(), phrase.freq)
     }
 }
 
@@ -323,7 +322,7 @@ pub enum LookupStrategy {
 /// ```
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///
-/// use chewing::{dictionary::{Dictionary, DictionaryMut, LookupStrategy, TrieBuf}, syl, zhuyin::Bopomofo};
+/// use chewing::{dictionary::{Dictionary, LookupStrategy, TrieBuf}, syl, zhuyin::Bopomofo};
 ///
 /// let mut dict = TrieBuf::new_in_memory();
 /// dict.add_phrase(&[syl![Bopomofo::C, Bopomofo::E, Bopomofo::TONE4]], ("測", 100).into())?;
@@ -348,21 +347,20 @@ pub trait Dictionary: Debug {
     fn about(&self) -> DictionaryInfo;
     /// Returns the dictionary file path if it's backed by a file.
     fn path(&self) -> Option<&Path>;
-    fn as_dict_mut(&mut self) -> Option<&mut dyn DictionaryMut>;
-}
-
-/// An interface for updating dictionaries.
-pub trait DictionaryMut: Debug {
     /// Reopens the dictionary if it was changed by a different process
     ///
     /// It should not fail if the dictionary is read-only or able to sync across
     /// processes automatically.
-    fn reopen(&mut self) -> Result<(), UpdateDictionaryError>;
+    fn reopen(&mut self) -> Result<(), UpdateDictionaryError> {
+        Err(UpdateDictionaryError { source: None })
+    }
     /// Flushes all the changes back to the filesystem
     ///
     /// The change made to the dictionary might not be persisted without
     /// calling this method.
-    fn flush(&mut self) -> Result<(), UpdateDictionaryError>;
+    fn flush(&mut self) -> Result<(), UpdateDictionaryError> {
+        Err(UpdateDictionaryError { source: None })
+    }
     /// An method for updating dictionaries.
     ///
     /// For more about the concept of dictionaries generally, please see the
@@ -373,7 +371,7 @@ pub trait DictionaryMut: Debug {
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///
-    /// use chewing::{dictionary::{DictionaryMut, TrieBuf}, syl, zhuyin::Bopomofo};
+    /// use chewing::{dictionary::{Dictionary, TrieBuf}, syl, zhuyin::Bopomofo};
     ///
     /// let mut dict = TrieBuf::new_in_memory();
     /// dict.add_phrase(&[syl![Bopomofo::C, Bopomofo::E, Bopomofo::TONE4]], ("測", 100).into())?;
@@ -383,25 +381,29 @@ pub trait DictionaryMut: Debug {
     /// TODO: doc
     fn add_phrase(
         &mut self,
-        syllables: &[Syllable],
-        phrase: Phrase,
-    ) -> Result<(), UpdateDictionaryError>;
-
+        _syllables: &[Syllable],
+        _phrase: Phrase,
+    ) -> Result<(), UpdateDictionaryError> {
+        Err(UpdateDictionaryError { source: None })
+    }
     /// TODO: doc
     fn update_phrase(
         &mut self,
-        syllables: &[Syllable],
-        phrase: Phrase,
-        user_freq: u32,
-        time: u64,
-    ) -> Result<(), UpdateDictionaryError>;
-
+        _syllables: &[Syllable],
+        _phrase: Phrase,
+        _user_freq: u32,
+        _time: u64,
+    ) -> Result<(), UpdateDictionaryError> {
+        Err(UpdateDictionaryError { source: None })
+    }
     /// TODO: doc
     fn remove_phrase(
         &mut self,
-        syllables: &[Syllable],
-        phrase_str: &str,
-    ) -> Result<(), UpdateDictionaryError>;
+        _syllables: &[Syllable],
+        _phrase_str: &str,
+    ) -> Result<(), UpdateDictionaryError> {
+        Err(UpdateDictionaryError { source: None })
+    }
 }
 
 /// Errors during dictionary construction.
@@ -431,7 +433,7 @@ impl From<io::Error> for BuildDictionaryError {
 }
 
 /// TODO: doc
-pub trait DictionaryBuilder {
+pub trait DictionaryBuilder: Any {
     /// TODO: doc
     fn set_info(&mut self, info: DictionaryInfo) -> Result<(), BuildDictionaryError>;
     /// TODO: doc
@@ -442,17 +444,15 @@ pub trait DictionaryBuilder {
     ) -> Result<(), BuildDictionaryError>;
     /// TODO: doc
     fn build(&mut self, path: &Path) -> Result<(), BuildDictionaryError>;
-    fn as_any(&self) -> &dyn Any;
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::dictionary::{Dictionary, DictionaryBuilder, DictionaryMut};
+    use crate::dictionary::{Dictionary, DictionaryBuilder};
 
     #[test]
     fn ensure_object_safe() {
         const _: Option<&dyn Dictionary> = None;
-        const _: Option<&dyn DictionaryMut> = None;
         const _: Option<&dyn DictionaryBuilder> = None;
     }
 }

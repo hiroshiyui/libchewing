@@ -1,5 +1,4 @@
 use std::{
-    any::Any,
     error::Error,
     fmt::Display,
     path::{Path, PathBuf},
@@ -8,12 +7,11 @@ use std::{
 
 use rusqlite::{Connection, Error as RusqliteError, OpenFlags, OptionalExtension, params};
 
-use crate::zhuyin::Syllable;
-
 use super::{
-    BuildDictionaryError, Dictionary, DictionaryBuilder, DictionaryInfo, DictionaryMut, Entries,
-    LookupStrategy, Phrase, UpdateDictionaryError,
+    BuildDictionaryError, Dictionary, DictionaryBuilder, DictionaryInfo, Entries, LookupStrategy,
+    Phrase, UpdateDictionaryError,
 };
+use crate::zhuyin::Syllable;
 
 const APPLICATION_ID: u32 = 0x43484557; // 'CHEW' in big-endian
 const USER_VERSION: u32 = 0;
@@ -200,7 +198,7 @@ impl SqliteDictionary {
             return Ok(());
         }
 
-        let mut userphrases: Vec<(Vec<Syllable>, String, u32, u32, u64)> = vec![];
+        let mut userphrases: Vec<(Vec<Syllable>, String, u32, u32, i64)> = vec![];
         {
             let mut stmt = conn.prepare(
                 "SELECT
@@ -329,10 +327,10 @@ impl Dictionary for SqliteDictionary {
             )
             .expect("SQL error");
         stmt.query_map([syllables_bytes], |row| {
-            let (phrase, freq, time): (Box<str>, _, _) = row.try_into()?;
+            let (phrase, freq, time): (Box<str>, _, Option<i64>) = row.try_into()?;
             let mut phrase = Phrase::new(phrase, freq);
             if let Some(last_used) = time {
-                phrase = phrase.with_time(last_used);
+                phrase = phrase.with_time(last_used as u64);
             }
             Ok(phrase)
         })
@@ -352,7 +350,7 @@ impl Dictionary for SqliteDictionary {
             .expect("SQL error");
         Box::new(
             stmt.query_map([], |row| {
-                let (syllables_bytes, phrase, freq, time): (Vec<u8>, Box<str>, _, _) =
+                let (syllables_bytes, phrase, freq, time): (Vec<u8>, Box<str>, _, Option<i64>) =
                     row.try_into()?;
                 let syllables = syllables_bytes
                     .chunks_exact(2)
@@ -365,7 +363,7 @@ impl Dictionary for SqliteDictionary {
                     .collect::<Vec<_>>();
                 let mut phrase = Phrase::new(phrase, freq);
                 if let Some(last_used) = time {
-                    phrase = phrase.with_time(last_used);
+                    phrase = phrase.with_time(last_used as u64);
                 }
                 Ok((syllables, phrase))
             })
@@ -384,17 +382,16 @@ impl Dictionary for SqliteDictionary {
         self.path.as_ref().map(|p| p as &Path)
     }
 
-    fn as_dict_mut(&mut self) -> Option<&mut dyn DictionaryMut> {
-        if !self.readonly { Some(self) } else { None }
-    }
-}
-
-impl DictionaryMut for SqliteDictionary {
     fn reopen(&mut self) -> Result<(), UpdateDictionaryError> {
         Ok(())
     }
 
     fn flush(&mut self) -> Result<(), UpdateDictionaryError> {
+        if self.readonly {
+            return Err(UpdateDictionaryError {
+                source: Some(Box::new(SqliteDictionaryError::ReadOnly)),
+            });
+        }
         self.conn.pragma_update(None, "wal_checkpoint", "PASSIVE")?;
         Ok(())
     }
@@ -428,6 +425,8 @@ impl DictionaryMut for SqliteDictionary {
         user_freq: u32,
         time: u64,
     ) -> Result<(), UpdateDictionaryError> {
+        // sqlite only supports i64
+        let time: i64 = time.clamp(0, i64::MAX as u64) as i64;
         if self.readonly {
             return Err(UpdateDictionaryError {
                 source: Some(Box::new(SqliteDictionaryError::ReadOnly)),
@@ -439,7 +438,7 @@ impl DictionaryMut for SqliteDictionary {
             let mut stmt = tx.prepare_cached(
                 "SELECT userphrase_id FROM dictionary_v1 WHERE syllables = ? AND phrase = ?",
             )?;
-            let userphrase_id: Option<Option<u64>> = stmt
+            let userphrase_id: Option<Option<i64>> = stmt
                 .query_row(params![syllables_bytes, phrase.as_str()], |row| row.get(0))
                 .optional()?;
             match userphrase_id {
@@ -493,7 +492,7 @@ impl DictionaryMut for SqliteDictionary {
 #[derive(Debug)]
 pub struct SqliteDictionaryBuilder {
     dict: SqliteDictionary,
-    sort_id: u64,
+    sort_id: i64,
 }
 
 impl SqliteDictionaryBuilder {
@@ -579,10 +578,6 @@ impl DictionaryBuilder for SqliteDictionaryBuilder {
         self.dict.conn.execute("VACUUM INTO ?", [path])?;
         Ok(())
     }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 }
 
 #[cfg(test)]
@@ -592,16 +587,14 @@ mod tests {
     use rusqlite::{Connection, params};
     use tempfile::{NamedTempFile, tempdir};
 
+    use super::SqliteDictionary;
     use crate::{
         dictionary::{
-            Dictionary, DictionaryBuilder, DictionaryMut, LookupStrategy, Phrase,
-            SqliteDictionaryBuilder,
+            Dictionary, DictionaryBuilder, LookupStrategy, Phrase, SqliteDictionaryBuilder,
         },
         syl,
         zhuyin::Bopomofo,
     };
-
-    use super::SqliteDictionary;
 
     #[test]
     fn migration_from_userphrase_v1() {
@@ -668,7 +661,7 @@ mod tests {
         let mut dict =
             SqliteDictionary::open_readonly(&temp_path).expect("Unable to open database");
         assert_eq!(temp_path.to_path_buf(), dict.path().unwrap());
-        assert!(dict.as_dict_mut().is_none());
+        assert!(dict.flush().is_err());
     }
 
     #[test]

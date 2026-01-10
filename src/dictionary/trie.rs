@@ -1,5 +1,5 @@
 use std::{
-    any::Any,
+    cell::Cell,
     cmp::Ordering,
     collections::VecDeque,
     error::Error,
@@ -19,12 +19,11 @@ use der::{
 };
 use log::{error, warn};
 
-use crate::zhuyin::Syllable;
-
 use super::{
     BuildDictionaryError, Dictionary, DictionaryBuilder, DictionaryInfo, Entries, LookupStrategy,
     Phrase,
 };
+use crate::zhuyin::Syllable;
 
 const DICT_FORMAT_VERSION: u8 = 0;
 
@@ -420,10 +419,6 @@ impl Dictionary for Trie {
     fn path(&self) -> Option<&Path> {
         self.path.as_ref().map(|p| p as &Path)
     }
-
-    fn as_dict_mut(&mut self) -> Option<&mut dyn super::DictionaryMut> {
-        None
-    }
 }
 
 fn context_specific<T: EncodeValue + Tagged>(
@@ -582,7 +577,7 @@ impl<'a> DecodeValue<'a> for Phrase {
             let freq = reader.decode()?;
             let last_used = reader.context_specific(TagNumber::N0, TagMode::Implicit)?;
             Ok(Phrase {
-                phrase: String::from(phrase).into_boxed_str(),
+                text: String::from(phrase).into_boxed_str(),
                 freq,
                 last_used,
             })
@@ -1156,10 +1151,7 @@ impl DictionaryBuilder for TrieBuilder {
 
     fn build(&mut self, path: &Path) -> Result<(), BuildDictionaryError> {
         let mut tmpname = path.to_path_buf();
-        let pseudo_random = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map(|du| du.subsec_micros())
-            .unwrap_or_default();
+        let pseudo_random = rand();
         tmpname.set_file_name(format!("chewing-{pseudo_random}.dat"));
         let database = File::create(&tmpname)?;
         let mut writer = BufWriter::new(&database);
@@ -1169,10 +1161,41 @@ impl DictionaryBuilder for TrieBuilder {
         fs::rename(&tmpname, path)?;
         Ok(())
     }
+}
 
-    fn as_any(&self) -> &dyn Any {
-        self
+// xoshiro256** PRNG
+//
+// Ref: <https://en.wikipedia.org/wiki/Xorshift#xoshiro256**>
+fn rand() -> u64 {
+    thread_local! {
+        static PRNG_STATE: Cell<[u64; 4]> = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|du| {
+                Cell::new([
+                    du.as_secs(),
+                    du.subsec_millis() as u64,
+                    du.subsec_micros() as u64,
+                    du.subsec_nanos() as u64,
+                ])
+            })
+            .unwrap_or_default();
     }
+    fn rol64(x: u64, k: u32) -> u64 {
+        x.wrapping_shl(k) | x.wrapping_shr(64 - k)
+    }
+    PRNG_STATE.with(|state| {
+        let mut s = state.get();
+        let result = rol64(s[1].wrapping_mul(5), 7).wrapping_mul(9);
+        let t = s[1].wrapping_shl(17);
+        s[2] ^= s[0];
+        s[3] ^= s[1];
+        s[1] ^= s[2];
+        s[0] ^= s[3];
+        s[2] ^= t;
+        s[3] = rol64(s[3], 45);
+        state.set(s);
+        result
+    })
 }
 
 impl Default for TrieBuilder {
@@ -1188,6 +1211,7 @@ mod tests {
         num::NonZeroUsize,
     };
 
+    use super::{Trie, TrieBuilder};
     use crate::{
         dictionary::{
             Dictionary, DictionaryBuilder, DictionaryInfo, LookupStrategy, Phrase, TrieOpenOptions,
@@ -1196,8 +1220,6 @@ mod tests {
         syl,
         zhuyin::Bopomofo,
     };
-
-    use super::{Trie, TrieBuilder};
 
     #[test]
     fn test_tree_construction() -> Result<(), Box<dyn std::error::Error>> {

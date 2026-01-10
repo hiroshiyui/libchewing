@@ -1,11 +1,5 @@
 //! Abstract input method editors.
 
-mod abbrev;
-mod composition_editor;
-mod estimate;
-mod selection;
-pub mod zhuyin_layout;
-
 use std::{
     any::Any,
     cmp::{max, min},
@@ -14,28 +8,33 @@ use std::{
     mem,
 };
 
-pub use self::{abbrev::AbbrevTable, selection::symbol::SymbolSelector};
-pub use estimate::{LaxUserFreqEstimate, UserFreqEstimate};
 use log::{debug, error, info, trace, warn};
 
+pub use self::estimate::{LaxUserFreqEstimate, UserFreqEstimate};
+pub use self::{abbrev::AbbrevTable, selection::symbol::SymbolSelector};
+use self::{
+    composition_editor::CompositionEditor,
+    selection::{phrase::PhraseSelector, symbol::SpecialSymbolSelector},
+    zhuyin_layout::{KeyBehavior, Standard, SyllableEditor},
+};
 use crate::{
     conversion::{
         ChewingEngine, ConversionEngine, Interval, Symbol, full_width_symbol_input,
         special_symbol_input,
     },
     dictionary::{
-        DEFAULT_DICT_NAMES, Dictionary, DictionaryMut, Layered, LookupStrategy,
-        SystemDictionaryLoader, UpdateDictionaryError, UserDictionaryLoader,
+        Dictionary, Layered, LookupStrategy, SystemDictionaryLoader, Trie, UpdateDictionaryError,
+        UserDictionaryLoader,
     },
     input::{KeyState, KeyboardEvent, keysym::*},
     zhuyin::Syllable,
 };
 
-use self::{
-    composition_editor::CompositionEditor,
-    selection::{phrase::PhraseSelector, symbol::SpecialSymbolSelector},
-    zhuyin_layout::{KeyBehavior, Standard, SyllableEditor},
-};
+mod abbrev;
+mod composition_editor;
+mod estimate;
+mod selection;
+pub mod zhuyin_layout;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LanguageMode {
@@ -107,7 +106,7 @@ impl Default for EditorOptions {
 /// An editor can react to KeyEvents and change its state.
 pub trait BasicEditor {
     /// Handles a KeyEvent
-    fn process_keyevent(&mut self, key_event: KeyboardEvent) -> EditorKeyBehavior;
+    fn process_keyevent(&mut self, evt: KeyboardEvent) -> EditorKeyBehavior;
 }
 
 /// The internal state of the editor.
@@ -189,17 +188,64 @@ pub(crate) struct SharedState {
 }
 
 impl Editor {
-    pub fn chewing() -> Result<Editor, Box<dyn Error>> {
-        let sys_loader = SystemDictionaryLoader::new();
-        let system_dict = sys_loader.load(DEFAULT_DICT_NAMES)?;
-        let user_dict = UserDictionaryLoader::new().load()?;
-        let estimate = LaxUserFreqEstimate::max_from(user_dict.as_ref());
-        let dict = Layered::new(system_dict, user_dict);
+    pub fn chewing<T>(
+        syspath: Option<String>,
+        userpath: Option<String>,
+        enabled_dicts: &[T],
+    ) -> Editor
+    where
+        T: AsRef<str>,
+    {
+        let mut sys_loader = SystemDictionaryLoader::new();
+        if let Some(syspath) = syspath {
+            sys_loader = sys_loader.sys_path(syspath);
+        }
+        let system_dicts = match sys_loader.load(enabled_dicts) {
+            Ok(d) => d,
+            Err(e) => {
+                let builtin = Trie::new(&include_bytes!("data/mini.dat")[..]);
+                error!("Failed to load system dict: {e}");
+                error!("Loading builtin minimum dictionary...");
+                // NB: we can unwrap because the built-in dictionary should always
+                // be valid.
+                vec![Box::new(builtin.unwrap()) as Box<dyn Dictionary>]
+            }
+        };
+        let abbrev = sys_loader.load_abbrev();
+        let abbrev = match abbrev {
+            Ok(abbr) => abbr,
+            Err(e) => {
+                error!("Failed to load abbrev table: {e}");
+                error!("Loading empty table...");
+                AbbrevTable::new()
+            }
+        };
+        let sym_sel = sys_loader.load_symbol_selector();
+        let sym_sel = match sym_sel {
+            Ok(sym_sel) => sym_sel,
+            Err(e) => {
+                error!("Failed to load symbol table: {e}");
+                error!("Loading empty table...");
+                // NB: we can unwrap here because empty table is always valid.
+                SymbolSelector::new(b"".as_slice()).unwrap()
+            }
+        };
+        let mut user_dict_loader = UserDictionaryLoader::new();
+        if let Some(userpath) = userpath {
+            user_dict_loader = user_dict_loader.userphrase_path(userpath);
+        }
+        let user_dictionary = match user_dict_loader.load() {
+            Ok(d) => d,
+            Err(e) => {
+                error!("Failed to load user dict: {e}");
+                UserDictionaryLoader::in_memory()
+            }
+        };
+        let estimate = LaxUserFreqEstimate::max_from(user_dictionary.as_ref());
+        let dict = Layered::new(system_dicts, user_dictionary);
         let conversion_engine = Box::new(ChewingEngine::new());
-        let abbrev = sys_loader.load_abbrev()?;
-        let sym_sel = sys_loader.load_symbol_selector()?;
         let editor = Editor::new(conversion_engine, dict, estimate, abbrev, sym_sel);
-        Ok(editor)
+        editor
     }
 
     pub fn new(
@@ -258,11 +304,15 @@ impl Editor {
     pub fn editor_options(&self) -> EditorOptions {
         self.shared.options
     }
-    pub fn set_editor_options(&mut self, options: EditorOptions) {
-        if self.shared.options.language_mode != options.language_mode {
+    pub fn set_editor_options<F>(&mut self, update_op: F)
+    where
+        F: FnOnce(&mut EditorOptions),
+    {
+        let old = self.shared.options;
+        update_op(&mut self.shared.options);
+        if self.shared.options.language_mode != old.language_mode {
             self.cancel_entering_syllable();
         }
-        self.shared.options = options;
     }
     pub fn entering_syllable(&self) -> bool {
         !self.shared.syl.is_empty()
@@ -358,7 +408,6 @@ impl Editor {
     pub fn cancel_selecting(&mut self) -> Result<(), EditorError> {
         if self.is_selecting() {
             self.shared.cancel_selecting();
-            self.shared.last_key_behavior = EditorKeyBehavior::Absorb;
             self.state = Box::new(Entering);
             Ok(())
         } else {
@@ -367,7 +416,6 @@ impl Editor {
     }
     pub fn cancel_entering_syllable(&mut self) {
         self.shared.syl.clear();
-        self.shared.last_key_behavior = EditorKeyBehavior::Absorb;
         self.state = Box::new(Entering);
     }
     pub fn last_key_behavior(&self) -> EditorKeyBehavior {
@@ -395,7 +443,7 @@ impl Editor {
         self.shared
             .conversion()
             .into_iter()
-            .map(|interval| interval.str)
+            .map(|interval| interval.text)
             .collect::<String>()
     }
     // TODO: decide the return type
@@ -521,15 +569,11 @@ impl SharedState {
         self.nth_conversion = 0;
     }
     fn conversion(&self) -> Vec<Interval> {
-        if self.nth_conversion > 0 {
-            let paths: Vec<_> = self.conv.convert(&self.dict, self.com.as_ref()).collect();
-            paths[self.nth_conversion % paths.len()].clone()
-        } else {
-            self.conv
-                .convert(&self.dict, self.com.as_ref())
-                .next()
-                .unwrap_or_default()
+        let paths = self.conv.convert(&self.dict, self.com.as_ref());
+        if paths.is_empty() {
+            return vec![];
         }
+        paths[self.nth_conversion % paths.len()].intervals.clone()
     }
     fn intervals(&self) -> impl Iterator<Item = Interval> {
         self.conversion().into_iter()
@@ -577,7 +621,7 @@ impl SharedState {
         let phrase = self
             .conversion()
             .into_iter()
-            .map(|interval| interval.str)
+            .map(|interval| interval.text)
             .collect::<String>()
             .chars()
             .skip(start)
@@ -617,14 +661,14 @@ impl SharedState {
         }
         let phrases = self.dict.lookup(syllables, LookupStrategy::Standard);
         if phrases.is_empty() {
-            self.dict.add_phrase(syllables, (phrase, 1).into())?;
+            self.dict.add_phrase(syllables, (phrase, 10).into())?;
             return Ok(());
         }
         let phrase = phrases
             .iter()
             .find(|p| p.as_str() == phrase)
             .cloned()
-            .unwrap_or((phrase, 0).into());
+            .unwrap_or((phrase, 10).into());
         // TODO: fine tune learning curve
         let max_freq = phrases.iter().map(|p| p.freq()).max().unwrap_or(1);
         let user_freq = self.estimate.estimate(&phrase, max_freq);
@@ -673,7 +717,7 @@ impl SharedState {
         }
         let output = intervals
             .into_iter()
-            .map(|interval| interval.str)
+            .map(|interval| interval.text)
             .collect::<String>();
         self.commit_buffer.push_str(&output);
         self.com.clear();
@@ -690,7 +734,7 @@ impl SharedState {
         let mut remove = 0;
         self.commit_buffer.clear();
         for it in intervals {
-            self.commit_buffer.push_str(&it.str);
+            self.commit_buffer.push_str(&it.text);
             remove += it.len();
             if len - remove <= self.options.auto_commit_threshold {
                 break;
@@ -743,13 +787,13 @@ fn collect_new_phrases(intervals: &[Interval], symbols: &[Symbol]) -> Vec<(Vec<S
             .iter()
             .map(|s| s.to_syllable().unwrap())
             .collect();
-        let pending = interval.str.clone().into_string();
+        let pending = interval.text.clone().into_string();
         collect(syllables, pending);
     }
     // Step 2. collect all intervals with length one with break words removed
     for interval in intervals.iter() {
-        if interval.is_phrase && interval.len() == 1 && !is_break_word(&interval.str) {
-            pending.push_str(&interval.str);
+        if interval.is_phrase && interval.len() == 1 && !is_break_word(&interval.text) {
+            pending.push_str(&interval.text);
             syllables.extend(
                 symbols[interval.start..interval.end]
                     .iter()
@@ -765,7 +809,7 @@ fn collect_new_phrases(intervals: &[Interval], symbols: &[Symbol]) -> Vec<(Vec<S
     // Step 3. collect all intervals with length one including break words
     for interval in intervals {
         if interval.is_phrase && interval.len() == 1 {
-            pending.push_str(&interval.str);
+            pending.push_str(&interval.text);
             syllables.extend(
                 symbols[interval.start..interval.end]
                     .iter()
@@ -1550,12 +1594,14 @@ impl State for Highlighting {
 
 #[cfg(test)]
 mod tests {
-    use estimate::LaxUserFreqEstimate;
-
+    use super::collect_new_phrases;
+    use super::estimate::LaxUserFreqEstimate;
+    use super::{BasicEditor, Editor};
+    use crate::editor::LanguageMode;
     use crate::{
         conversion::{ChewingEngine, Interval, Symbol},
         dictionary::{Layered, TrieBuf},
-        editor::{EditorKeyBehavior, EditorOptions, SymbolSelector, abbrev::AbbrevTable, estimate},
+        editor::{EditorKeyBehavior, SymbolSelector, abbrev::AbbrevTable},
         input::{
             KeyboardEvent, keycode,
             keymap::{QWERTY_MAP, map_ascii},
@@ -1564,9 +1610,6 @@ mod tests {
         syl,
         zhuyin::Bopomofo as bpmf,
     };
-
-    use super::collect_new_phrases;
-    use super::{BasicEditor, Editor};
 
     const CAPSLOCK_EVENT: KeyboardEvent = KeyboardEvent::builder()
         .code(keycode::KEY_CAPSLOCK)
@@ -1652,10 +1695,7 @@ mod tests {
         let sym_sel = SymbolSelector::default();
         let mut editor = Editor::new(conversion_engine, dict, estimate, abbrev, sym_sel);
 
-        editor.set_editor_options(EditorOptions {
-            sort_candidates_by_frequency: false,
-            ..Default::default()
-        });
+        editor.set_editor_options(|opt| opt.sort_candidates_by_frequency = false);
 
         editor.process_keyevent(
             KeyboardEvent::builder()
@@ -1700,10 +1740,7 @@ mod tests {
         let sym_sel = SymbolSelector::default();
         let mut editor = Editor::new(conversion_engine, dict, estimate, abbrev, sym_sel);
 
-        editor.set_editor_options(EditorOptions {
-            sort_candidates_by_frequency: true,
-            ..Default::default()
-        });
+        editor.set_editor_options(|opt| opt.sort_candidates_by_frequency = true);
 
         editor.process_keyevent(
             KeyboardEvent::builder()
@@ -1834,6 +1871,26 @@ mod tests {
     }
 
     #[test]
+    fn editing_mode_input_switch_mode_behavior() {
+        let dict = TrieBuf::new_in_memory();
+        let dict = Layered::new(vec![Box::new(dict)], Box::new(TrieBuf::new_in_memory()));
+        let conversion_engine = Box::new(ChewingEngine::new());
+        let estimate = LaxUserFreqEstimate::new(0);
+        let abbrev = AbbrevTable::new();
+        let sym_sel = SymbolSelector::default();
+        let mut editor = Editor::new(conversion_engine, dict, estimate, abbrev, sym_sel);
+
+        editor.set_editor_options(|opt| opt.language_mode = LanguageMode::English);
+
+        editor.process_keyevent(map_ascii(&QWERTY_MAP, b'X'));
+
+        editor.set_editor_options(|opt| opt.language_mode = LanguageMode::Chinese);
+
+        assert_eq!(EditorKeyBehavior::Commit, editor.last_key_behavior());
+        assert_eq!("X", editor.display_commit());
+    }
+
+    #[test]
     fn editing_chinese_mode_input_special_symbol() {
         let dict = TrieBuf::from([(
             vec![crate::syl![bpmf::C, bpmf::E, bpmf::TONE4]],
@@ -1939,19 +1996,19 @@ mod tests {
                 start: 0,
                 end: 2,
                 is_phrase: true,
-                str: "今天".into(),
+                text: "今天".into(),
             },
             Interval {
                 start: 2,
                 end: 4,
                 is_phrase: true,
-                str: "天氣".into(),
+                text: "天氣".into(),
             },
             Interval {
                 start: 4,
                 end: 6,
                 is_phrase: true,
-                str: "真好".into(),
+                text: "真好".into(),
             },
         ];
         let symbols = [
@@ -1998,25 +2055,25 @@ mod tests {
                 start: 0,
                 end: 2,
                 is_phrase: true,
-                str: "今天".into(),
+                text: "今天".into(),
             },
             Interval {
                 start: 2,
                 end: 3,
                 is_phrase: true,
-                str: "也".into(),
+                text: "也".into(),
             },
             Interval {
                 start: 3,
                 end: 4,
                 is_phrase: true,
-                str: "是".into(),
+                text: "是".into(),
             },
             Interval {
                 start: 4,
                 end: 7,
                 is_phrase: true,
-                str: "好天氣".into(),
+                text: "好天氣".into(),
             },
         ];
         let symbols = [

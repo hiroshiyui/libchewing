@@ -9,14 +9,13 @@ use std::{
 
 use log::{error, info};
 
+#[cfg(feature = "sqlite")]
+use super::SqliteDictionary;
+use super::{Dictionary, TrieBuf, uhash};
 use crate::{
     editor::{AbbrevTable, SymbolSelector},
     path::{find_files_by_names, find_path_by_files, sys_path_from_env_var, userphrase_path},
 };
-
-#[cfg(feature = "sqlite")]
-use super::SqliteDictionary;
-use super::{Dictionary, TrieBuf, uhash};
 
 const UD_UHASH_FILE_NAME: &str = "uhash.dat";
 // const UD_TRIE_FILE_NAME: &str = "chewing.dat";
@@ -175,14 +174,10 @@ impl UserDictionaryLoader {
                     let freq = phrase.freq();
                     let last_used = phrase.last_used().unwrap_or_default();
                     fresh_dict
-                        .as_dict_mut()
-                        .unwrap()
                         .update_phrase(&syllables, phrase, freq, last_used)
                         .map_err(|e| io::Error::new(io::ErrorKind::Other, Box::new(e)))?;
                 }
                 fresh_dict
-                    .as_dict_mut()
-                    .unwrap()
                     .flush()
                     .map_err(|e| io::Error::new(io::ErrorKind::Other, Box::new(e)))?;
             }
@@ -198,14 +193,10 @@ impl UserDictionaryLoader {
                         let freq = phrase.freq();
                         let last_used = phrase.last_used().unwrap_or_default();
                         fresh_dict
-                            .as_dict_mut()
-                            .unwrap()
                             .update_phrase(&syllables, phrase, freq, last_used)
                             .map_err(|e| io::Error::other(Box::new(e)))?;
                     }
                     fresh_dict
-                        .as_dict_mut()
-                        .unwrap()
                         .flush()
                         .map_err(|e| io::Error::other(Box::new(e)))?;
                 }
