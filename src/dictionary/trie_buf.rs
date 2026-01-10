@@ -9,12 +9,11 @@ use std::{
 
 use log::{error, info};
 
-use crate::zhuyin::{Syllable, SyllableSlice};
-
 use super::{
-    BuildDictionaryError, Dictionary, DictionaryBuilder, DictionaryInfo, DictionaryMut, Entries,
-    LookupStrategy, Phrase, Trie, TrieBuilder, UpdateDictionaryError,
+    BuildDictionaryError, Dictionary, DictionaryBuilder, DictionaryInfo, Entries, LookupStrategy,
+    Phrase, Trie, TrieBuilder, UpdateDictionaryError,
 };
+use crate::zhuyin::Syllable;
 
 /// A mutable dictionary backed by a Trie and a BTreeMap.
 #[derive(Debug)]
@@ -78,21 +77,21 @@ impl TrieBuf {
 
     pub(crate) fn entries_iter_for<'a>(
         &'a self,
-        syllables: &'a dyn SyllableSlice,
+        syllables: &'a [Syllable],
         strategy: LookupStrategy,
     ) -> impl Iterator<Item = Phrase> + 'a {
-        let syllable_key = Cow::from(syllables.to_slice().into_owned());
-        let min_key = (syllable_key.clone(), Cow::from(MIN_PHRASE));
-        let max_key = (syllable_key.clone(), Cow::from(MAX_PHRASE));
+        let syllables_key = Cow::from(syllables.to_vec());
+        let min_key = (syllables_key.clone(), Cow::from(MIN_PHRASE));
+        let max_key = (syllables_key.clone(), Cow::from(MAX_PHRASE));
         let store_iter = self
             .trie
             .iter()
-            .flat_map(move |trie| trie.lookup_all_phrases(syllables, strategy));
+            .flat_map(move |trie| trie.lookup(syllables, strategy));
         let btree_iter = self
             .btree
             .range(min_key..max_key)
             .map(|(key, value)| Phrase {
-                phrase: key.1.clone().into(),
+                text: key.1.clone().into(),
                 freq: value.0,
                 last_used: Some(value.1),
             });
@@ -100,7 +99,7 @@ impl TrieBuf {
         store_iter.chain(btree_iter).filter(move |it| {
             !self
                 .graveyard
-                .contains(&(syllable_key.clone(), Cow::from(it.as_str())))
+                .contains(&(syllables_key.clone(), Cow::from(it.as_str())))
         })
     }
 
@@ -113,7 +112,7 @@ impl TrieBuf {
                 (
                     key.0.clone().into_owned(),
                     Phrase {
-                        phrase: key.1.clone().into(),
+                        text: key.1.clone().into(),
                         freq: value.0,
                         last_used: Some(value.1),
                     },
@@ -127,12 +126,7 @@ impl TrieBuf {
         })
     }
 
-    pub(crate) fn lookup_first_n_phrases(
-        &self,
-        syllables: &dyn SyllableSlice,
-        first: usize,
-        strategy: LookupStrategy,
-    ) -> Vec<Phrase> {
+    pub(crate) fn lookup(&self, syllables: &[Syllable], strategy: LookupStrategy) -> Vec<Phrase> {
         let mut sort_map = BTreeMap::new();
         let mut phrases: Vec<Phrase> = Vec::new();
 
@@ -148,7 +142,6 @@ impl TrieBuf {
                 }
             }
         }
-        phrases.truncate(first);
         phrases
     }
 
@@ -158,12 +151,11 @@ impl TrieBuf {
 
     pub(crate) fn add_phrase(
         &mut self,
-        syllables: &dyn SyllableSlice,
+        syllables: &[Syllable],
         phrase: Phrase,
     ) -> Result<(), UpdateDictionaryError> {
-        let syllable_slice = syllables.to_slice();
         if self
-            .entries_iter_for(&syllable_slice.as_ref(), LookupStrategy::Standard)
+            .entries_iter_for(syllables, LookupStrategy::Standard)
             .any(|ph| ph.as_str() == phrase.as_str())
         {
             return Err(UpdateDictionaryError { source: None });
@@ -171,8 +163,8 @@ impl TrieBuf {
 
         self.btree.insert(
             (
-                Cow::from(syllable_slice.into_owned()),
-                Cow::from(phrase.phrase.into_string()),
+                Cow::from(syllables.to_vec()),
+                Cow::from(phrase.text.into_string()),
             ),
             (phrase.freq, phrase.last_used.unwrap_or_default()),
         );
@@ -183,15 +175,15 @@ impl TrieBuf {
 
     pub(crate) fn update_phrase(
         &mut self,
-        syllables: &dyn SyllableSlice,
+        syllables: &[Syllable],
         phrase: Phrase,
         user_freq: u32,
         time: u64,
     ) -> Result<(), UpdateDictionaryError> {
         self.btree.insert(
             (
-                Cow::from(syllables.to_slice().into_owned()),
-                Cow::from(phrase.phrase.into_string()),
+                Cow::from(syllables.to_vec()),
+                Cow::from(phrase.text.into_string()),
             ),
             (user_freq, time),
         );
@@ -202,14 +194,14 @@ impl TrieBuf {
 
     pub(crate) fn remove_phrase(
         &mut self,
-        syllables: &dyn SyllableSlice,
+        syllables: &[Syllable],
         phrase_str: &str,
     ) -> Result<(), UpdateDictionaryError> {
-        let syllable_slice = Cow::from(syllables.to_slice().into_owned());
+        let syllables_key = Cow::from(syllables.to_vec());
         self.btree
-            .remove(&(syllable_slice.clone(), Cow::from(phrase_str.to_owned())));
+            .remove(&(syllables_key.clone(), Cow::from(phrase_str.to_owned())));
         self.graveyard
-            .insert((syllable_slice, phrase_str.to_owned().into()));
+            .insert((syllables_key, phrase_str.to_owned().into()));
         self.dirty = true;
 
         Ok(())
@@ -294,13 +286,8 @@ impl From<BuildDictionaryError> for UpdateDictionaryError {
 }
 
 impl Dictionary for TrieBuf {
-    fn lookup_first_n_phrases(
-        &self,
-        syllables: &dyn SyllableSlice,
-        first: usize,
-        strategy: LookupStrategy,
-    ) -> Vec<Phrase> {
-        TrieBuf::lookup_first_n_phrases(self, syllables, first, strategy)
+    fn lookup(&self, syllables: &[Syllable], strategy: LookupStrategy) -> Vec<Phrase> {
+        TrieBuf::lookup(self, syllables, strategy)
     }
 
     fn entries(&self) -> Entries<'_> {
@@ -317,12 +304,6 @@ impl Dictionary for TrieBuf {
         self.trie.as_ref()?.path()
     }
 
-    fn as_dict_mut(&mut self) -> Option<&mut dyn DictionaryMut> {
-        Some(self)
-    }
-}
-
-impl DictionaryMut for TrieBuf {
     fn reopen(&mut self) -> Result<(), UpdateDictionaryError> {
         self.sync()?;
         Ok(())
@@ -335,7 +316,7 @@ impl DictionaryMut for TrieBuf {
 
     fn add_phrase(
         &mut self,
-        syllables: &dyn SyllableSlice,
+        syllables: &[Syllable],
         phrase: Phrase,
     ) -> Result<(), UpdateDictionaryError> {
         TrieBuf::add_phrase(self, syllables, phrase)
@@ -343,7 +324,7 @@ impl DictionaryMut for TrieBuf {
 
     fn update_phrase(
         &mut self,
-        syllables: &dyn SyllableSlice,
+        syllables: &[Syllable],
         phrase: Phrase,
         user_freq: u32,
         time: u64,
@@ -353,7 +334,7 @@ impl DictionaryMut for TrieBuf {
 
     fn remove_phrase(
         &mut self,
-        syllables: &dyn SyllableSlice,
+        syllables: &[Syllable],
         phrase_str: &str,
     ) -> Result<(), UpdateDictionaryError> {
         TrieBuf::remove_phrase(self, syllables, phrase_str)
@@ -386,13 +367,12 @@ impl Drop for TrieBuf {
 mod tests {
     use std::error::Error;
 
+    use super::{Dictionary, TrieBuf};
     use crate::{
-        dictionary::{DictionaryMut, LookupStrategy, Phrase},
+        dictionary::{LookupStrategy, Phrase},
         syl,
         zhuyin::Bopomofo::*,
     };
-
-    use super::{Dictionary, TrieBuf};
 
     #[test]
     fn create_new_dictionary_in_memory_and_query() -> Result<(), Box<dyn Error>> {
@@ -407,10 +387,12 @@ mod tests {
         assert_eq!("Unknown", info.copyright);
         assert_eq!(
             Some(("dict", 1, 2).into()),
-            dict.lookup_first_phrase(
+            dict.lookup(
                 &[syl![Z, TONE4], syl![D, I, AN, TONE3]],
                 LookupStrategy::Standard
             )
+            .first()
+            .cloned()
         );
         Ok(())
     }
@@ -433,10 +415,12 @@ mod tests {
         assert_eq!("Unknown", info.copyright);
         assert_eq!(
             Some(("dict", 1, 2).into()),
-            dict.lookup_first_phrase(
+            dict.lookup(
                 &[syl![Z, TONE4], syl![D, I, AN, TONE3]],
                 LookupStrategy::Standard
             )
+            .first()
+            .cloned()
         );
         Ok(())
     }

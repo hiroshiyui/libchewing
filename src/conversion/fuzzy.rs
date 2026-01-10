@@ -1,6 +1,5 @@
+use super::{ChewingEngine, ConversionEngine, Outcome};
 use crate::dictionary::LookupStrategy;
-
-use super::{ChewingEngine, ConversionEngine};
 
 /// Same conversion method as Chewing but uses fuzzy phrase search.
 #[derive(Debug, Default)]
@@ -24,7 +23,7 @@ impl ConversionEngine for FuzzyChewingEngine {
         &'a self,
         dict: &'a dyn crate::dictionary::Dictionary,
         comp: &'a super::Composition,
-    ) -> Box<dyn Iterator<Item = Vec<super::Interval>> + 'a> {
-        Box::new(ChewingEngine::convert(&self.inner, dict, comp))
+    ) -> Vec<Outcome> {
+        ChewingEngine::convert(&self.inner, dict, comp)
     }
 }

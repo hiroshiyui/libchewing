@@ -3,20 +3,19 @@ use std::{
     collections::BTreeMap,
     ffi::{CStr, CString, c_char, c_int, c_uint, c_ushort, c_void},
     mem,
+    ops::Not,
     ptr::{null, null_mut},
-    slice, str,
+    slice,
+    str::{self},
     sync::RwLock,
 };
 
 use chewing::{
     conversion::{ChewingEngine, FuzzyChewingEngine, Interval, SimpleEngine, Symbol},
-    dictionary::{
-        DEFAULT_DICT_NAMES, Dictionary, Layered, LookupStrategy, SystemDictionaryLoader, Trie,
-        UserDictionaryLoader,
-    },
+    dictionary::{DEFAULT_DICT_NAMES, LookupStrategy},
     editor::{
-        AbbrevTable, BasicEditor, CharacterForm, ConversionEngineKind, Editor, EditorKeyBehavior,
-        LanguageMode, LaxUserFreqEstimate, SymbolSelector, UserPhraseAddDirection,
+        BasicEditor, CharacterForm, ConversionEngineKind, Editor, EditorKeyBehavior, LanguageMode,
+        UserPhraseAddDirection,
         zhuyin_layout::{
             DaiChien26, Et, Et26, GinYieh, Hsu, Ibm, KeyboardLayoutCompat, Pinyin, Standard,
             SyllableEditor,
@@ -34,22 +33,21 @@ use chewing::{
     },
     zhuyin::Syllable,
 };
-use log::{debug, error, info};
+use log::{debug, info};
 
-use crate::public::{
-    CHEWING_CONVERSION_ENGINE, CHINESE_MODE, ChewingConfigData, ChewingContext, FULLSHAPE_MODE,
-    FUZZY_CHEWING_CONVERSION_ENGINE, HALFSHAPE_MODE, IntervalType, MAX_SELKEY,
-    SIMPLE_CONVERSION_ENGINE, SYMBOL_MODE, SelKeys,
+use crate::{
+    logger::init_scoped_logging,
+    public::{
+        CHEWING_CONVERSION_ENGINE, CHINESE_MODE, ChewingConfigData, ChewingContext, FULLSHAPE_MODE,
+        FUZZY_CHEWING_CONVERSION_ENGINE, HALFSHAPE_MODE, IntervalType, MAX_SELKEY,
+        SIMPLE_CONVERSION_ENGINE, SYMBOL_MODE, SelKeys,
+    },
 };
-
-use super::logger::ChewingLogger;
 
 const TRUE: c_int = 1;
 const FALSE: c_int = 0;
 const OK: c_int = 0;
 const ERROR: c_int = -1;
-
-static LOGGER: ChewingLogger = ChewingLogger::new();
 
 enum Owned {
     CString,
@@ -165,22 +163,14 @@ pub unsafe extern "C" fn chewing_new3(
     syspath: *const c_char,
     userpath: *const c_char,
     enabled_dicts: *const c_char,
-    logger: Option<unsafe extern "C" fn(data: *mut c_void, level: c_int, fmt: *const c_char, ...)>,
-    loggerdata: *mut c_void,
+    logger_fn: Option<
+        unsafe extern "C" fn(data: *mut c_void, level: c_int, fmt: *const c_char, ...),
+    >,
+    logger_data: *mut c_void,
 ) -> *mut ChewingContext {
-    LOGGER.init();
-    let _ = log::set_logger(&LOGGER);
-    log::set_max_level(log::LevelFilter::Trace);
-    if let Some(logger) = logger {
-        LOGGER.set(Some((logger, loggerdata)));
-    }
-    let mut sys_loader = SystemDictionaryLoader::new();
+    let _ = crate::logger::init();
+    let _logger_guard = init_scoped_logging(logger_fn, logger_data);
     let mut dict_names: Vec<String> = DEFAULT_DICT_NAMES.iter().map(|&n| n.to_owned()).collect();
-    if !syspath.is_null() {
-        if let Ok(search_path) = unsafe { CStr::from_ptr(syspath).to_str() } {
-            sys_loader = sys_loader.sys_path(search_path);
-        }
-    }
     if !enabled_dicts.is_null() {
         if let Ok(enabled_dicts) = unsafe { CStr::from_ptr(enabled_dicts).to_str() } {
             dict_names = enabled_dicts
@@ -189,56 +179,22 @@ pub unsafe extern "C" fn chewing_new3(
                 .collect();
         }
     }
-    let system_dicts = match sys_loader.load(&dict_names) {
-        Ok(d) => d,
-        Err(e) => {
-            let builtin = Trie::new(&include_bytes!("../data/mini.dat")[..]);
-            error!("Failed to load system dict: {e}");
-            error!("Loading builtin minimum dictionary...");
-            // NB: we can unwrap because the built-in dictionary should always
-            // be valid.
-            vec![Box::new(builtin.unwrap()) as Box<dyn Dictionary>]
-        }
+    let syspath = if syspath.is_null() {
+        None
+    } else {
+        unsafe { CStr::from_ptr(syspath).to_str() }
+            .ok()
+            .map(|p| p.to_owned())
     };
-    let abbrev = sys_loader.load_abbrev();
-    let abbrev = match abbrev {
-        Ok(abbr) => abbr,
-        Err(e) => {
-            error!("Failed to load abbrev table: {e}");
-            error!("Loading empty table...");
-            AbbrevTable::new()
-        }
+    let userpath = if userpath.is_null() {
+        None
+    } else {
+        unsafe { CStr::from_ptr(userpath).to_str() }
+            .ok()
+            .map(|p| p.to_owned())
     };
-    let sym_sel = sys_loader.load_symbol_selector();
-    let sym_sel = match sym_sel {
-        Ok(sym_sel) => sym_sel,
-        Err(e) => {
-            error!("Failed to load symbol table: {e}");
-            error!("Loading empty table...");
-            // NB: we can unwrap here because empty table is always valid.
-            SymbolSelector::new(b"".as_slice()).unwrap()
-        }
-    };
-    let mut user_dictionary = UserDictionaryLoader::new();
-    if !userpath.is_null() {
-        if let Ok(data_path) = unsafe { CStr::from_ptr(userpath).to_str() } {
-            user_dictionary = user_dictionary.userphrase_path(data_path);
-        }
-    }
-    let user_dictionary = match user_dictionary.load() {
-        Ok(d) => d,
-        Err(e) => {
-            error!("Failed to load user dict: {e}");
-            UserDictionaryLoader::in_memory()
-        }
-    };
-
-    let estimate = LaxUserFreqEstimate::max_from(user_dictionary.as_ref());
-
-    let dict = Layered::new(system_dicts, user_dictionary);
-    let conversion_engine = Box::new(ChewingEngine::new());
     let kb_compat = KeyboardLayoutCompat::Default;
-    let editor = Editor::new(conversion_engine, dict, estimate, abbrev, sym_sel);
+    let editor = Editor::chewing(syspath, userpath, &dict_names);
     let context = Box::new(ChewingContext {
         kb_compat,
         keymap: &QWERTY_MAP,
@@ -265,6 +221,8 @@ pub unsafe extern "C" fn chewing_new3(
         cand_buf: [0; 256],
         aux_buf: [0; 256],
         kbtype_buf: [0; 32],
+        logger_fn,
+        logger_data,
     });
     let ptr = Box::into_raw(context);
     info!("Initialized context {ptr:?}");
@@ -290,7 +248,6 @@ pub unsafe extern "C" fn chewing_get_defaultDictionaryNames() -> *const c_char {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_delete(ctx: *mut ChewingContext) {
     if !ctx.is_null() {
-        LOGGER.set(None);
         info!("Destroying context {ctx:?}");
         drop(unsafe { Box::from_raw(ctx) })
     }
@@ -364,6 +321,7 @@ macro_rules! as_ref_or_return {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_Reset(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
     ctx.editor.clear();
     OK
 }
@@ -384,6 +342,7 @@ pub unsafe extern "C" fn chewing_Reset(ctx: *mut ChewingContext) -> c_int {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_ack(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
     ctx.editor.ack();
     OK
 }
@@ -396,7 +355,8 @@ pub unsafe extern "C" fn chewing_config_has_option(
     ctx: *const ChewingContext,
     name: *const c_char,
 ) -> c_int {
-    let _ctx = as_ref_or_return!(ctx, ERROR);
+    let ctx = as_ref_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
     let cstr = unsafe { CStr::from_ptr(name) };
     let name = cstr.to_string_lossy();
 
@@ -432,6 +392,7 @@ pub unsafe extern "C" fn chewing_config_get_int(
     name: *const c_char,
 ) -> c_int {
     let ctx = as_ref_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     if unsafe { chewing_config_has_option(ctx, name) } != 1 {
         return ERROR;
@@ -484,6 +445,7 @@ pub unsafe extern "C" fn chewing_config_set_int(
     value: c_int,
 ) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     if unsafe { chewing_config_has_option(ctx, name) } != 1 {
         return ERROR;
@@ -597,7 +559,7 @@ pub unsafe extern "C" fn chewing_config_set_int(
         _ => return ERROR,
     };
 
-    ctx.editor.set_editor_options(options);
+    ctx.editor.set_editor_options(|opt| *opt = options);
 
     OK
 }
@@ -612,6 +574,7 @@ pub unsafe extern "C" fn chewing_config_get_str(
     value: *mut *mut c_char,
 ) -> c_int {
     let ctx = as_ref_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     if unsafe { chewing_config_has_option(ctx, name) } != 1 {
         return ERROR;
@@ -658,6 +621,7 @@ pub unsafe extern "C" fn chewing_config_set_str(
     value: *const c_char,
 ) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     if unsafe { chewing_config_has_option(ctx, name) } != 1 {
         return ERROR;
@@ -730,6 +694,8 @@ pub unsafe extern "C" fn chewing_config_set_str(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_set_KBType(ctx: *mut ChewingContext, kbtype: c_int) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
+
     use KeyboardLayoutCompat as KB;
     let kb_compat = match KB::try_from(kbtype as u8) {
         Ok(kb) => kb,
@@ -774,6 +740,8 @@ pub unsafe extern "C" fn chewing_set_KBType(ctx: *mut ChewingContext, kbtype: c_
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_get_KBType(ctx: *const ChewingContext) -> c_int {
     let ctx = as_ref_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
+
     ctx.kb_compat as c_int
 }
 
@@ -798,6 +766,7 @@ pub unsafe extern "C" fn chewing_get_KBString(ctx: *const ChewingContext) -> *mu
         ctx,
         owned_into_raw(Owned::CString, CString::default().into_raw())
     );
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     let kb_string = ctx.kb_compat.to_string();
     owned_into_raw(
@@ -963,6 +932,7 @@ pub unsafe extern "C" fn chewing_set_selKey(
     len: c_int,
 ) {
     let ctx = as_mut_or_return!(ctx);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     if sel_keys.is_null() || len != 10 {
         return;
@@ -984,6 +954,7 @@ pub unsafe extern "C" fn chewing_set_selKey(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_get_selKey(ctx: *const ChewingContext) -> *mut c_int {
     let ctx = as_ref_or_return!(ctx, null_mut());
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     let len = ctx.sel_keys.0.len();
     let ptr = Box::into_raw(ctx.sel_keys.0.to_vec().into_boxed_slice());
@@ -1187,6 +1158,7 @@ pub unsafe extern "C" fn chewing_get_autoLearn(ctx: *const ChewingContext) -> c_
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_get_phoneSeq(ctx: *const ChewingContext) -> *mut c_ushort {
     let ctx = as_ref_or_return!(ctx, null_mut());
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     let syllables: Vec<_> = ctx
         .editor
@@ -1211,6 +1183,7 @@ pub unsafe extern "C" fn chewing_get_phoneSeq(ctx: *const ChewingContext) -> *mu
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_get_phoneSeqLen(ctx: *const ChewingContext) -> c_int {
     let ctx = as_ref_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     ctx.editor
         .symbols()
@@ -1254,17 +1227,14 @@ pub unsafe extern "C" fn chewing_get_phoneSeqLen(ctx: *const ChewingContext) -> 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_set_logger(
     ctx: *mut ChewingContext,
-    logger: Option<extern "C" fn(data: *mut c_void, level: c_int, fmt: *const c_char, ...)>,
-    user_data: *mut c_void,
+    logger_fn: Option<
+        unsafe extern "C" fn(data: *mut c_void, level: c_int, fmt: *const c_char, ...),
+    >,
+    logger_data: *mut c_void,
 ) {
-    as_mut_or_return!(ctx);
-    if let Some(logger) = logger {
-        log::set_max_level(log::LevelFilter::Trace);
-        LOGGER.set(Some((logger, user_data)));
-    } else {
-        log::set_max_level(log::LevelFilter::Off);
-        LOGGER.set(None);
-    }
+    let ctx = as_mut_or_return!(ctx);
+    ctx.logger_fn = logger_fn;
+    ctx.logger_data = logger_data;
 }
 
 /// Starts a userphrase enumeration.
@@ -1299,6 +1269,7 @@ pub unsafe extern "C" fn chewing_set_logger(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_userphrase_enumerate(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     ctx.userphrase_iter = Some(ctx.editor.user_dict().entries().peekable());
     OK
@@ -1320,6 +1291,7 @@ pub unsafe extern "C" fn chewing_userphrase_has_next(
     bopomofo_len: *mut c_uint,
 ) -> c_int {
     let ctx = as_mut_or_return!(ctx, FALSE);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     if ctx.userphrase_iter.is_none() {
         return 0;
@@ -1370,6 +1342,7 @@ pub unsafe extern "C" fn chewing_userphrase_get(
     bopomofo_len: c_uint,
 ) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     if ctx.userphrase_iter.is_none() {
         return -1;
@@ -1419,6 +1392,8 @@ pub unsafe extern "C" fn chewing_userphrase_add(
     bopomofo_buf: *const c_char,
 ) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
+
     let syllables = match unsafe { str_from_ptr_with_nul(bopomofo_buf) } {
         Some(bopomofo) => bopomofo
             .split_ascii_whitespace()
@@ -1453,10 +1428,8 @@ pub unsafe extern "C" fn chewing_userphrase_remove(
     phrase_buf: *const c_char,
     bopomofo_buf: *const c_char,
 ) -> c_int {
-    let ctx = match unsafe { ctx.as_mut() } {
-        Some(ctx) => ctx,
-        None => return ERROR,
-    };
+    let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     // return FALSE when phrase does not exist is C API only behavior
     if unsafe { chewing_userphrase_lookup(ctx, phrase_buf, bopomofo_buf) } != TRUE {
@@ -1494,6 +1467,8 @@ pub unsafe extern "C" fn chewing_userphrase_lookup(
     bopomofo_buf: *const c_char,
 ) -> c_int {
     let ctx = as_mut_or_return!(ctx, FALSE);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
+
     let syllables = match unsafe { str_from_ptr_with_nul(bopomofo_buf) } {
         Some(bopomofo) => bopomofo
             .split_ascii_whitespace()
@@ -1506,14 +1481,15 @@ pub unsafe extern "C" fn chewing_userphrase_lookup(
         Some(phrase) => ctx
             .editor
             .user_dict()
-            .lookup_all_phrases(&syllables, LookupStrategy::Standard)
+            .lookup(&syllables, LookupStrategy::Standard)
             .iter()
             .any(|ph| ph.as_str() == phrase) as c_int,
         None => ctx
             .editor
             .user_dict()
-            .lookup_first_phrase(&syllables, LookupStrategy::Standard)
-            .is_some() as c_int,
+            .lookup(&syllables, LookupStrategy::Standard)
+            .is_empty()
+            .not() as c_int,
     }
 }
 
@@ -1532,6 +1508,7 @@ pub unsafe extern "C" fn chewing_userphrase_lookup(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_cand_list_first(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     if !ctx.editor.is_selecting() {
         return -1;
@@ -1556,6 +1533,7 @@ pub unsafe extern "C" fn chewing_cand_list_first(ctx: *mut ChewingContext) -> c_
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_cand_list_last(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     if !ctx.editor.is_selecting() {
         return -1;
@@ -1575,6 +1553,7 @@ pub unsafe extern "C" fn chewing_cand_list_last(ctx: *mut ChewingContext) -> c_i
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_cand_list_has_next(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_ref_or_return!(ctx, FALSE);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     if !ctx.editor.is_selecting() {
         return 0;
@@ -1593,6 +1572,7 @@ pub unsafe extern "C" fn chewing_cand_list_has_next(ctx: *mut ChewingContext) ->
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_cand_list_has_prev(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_ref_or_return!(ctx, FALSE);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     if !ctx.editor.is_selecting() {
         return 0;
@@ -1616,6 +1596,8 @@ pub unsafe extern "C" fn chewing_cand_list_has_prev(ctx: *mut ChewingContext) ->
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_cand_list_next(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
+
     if !ctx.editor.is_selecting() {
         return -1;
     }
@@ -1640,6 +1622,8 @@ pub unsafe extern "C" fn chewing_cand_list_next(ctx: *mut ChewingContext) -> c_i
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_cand_list_prev(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
+
     if !ctx.editor.is_selecting() {
         return -1;
     }
@@ -1663,6 +1647,7 @@ pub unsafe extern "C" fn chewing_cand_list_prev(ctx: *mut ChewingContext) -> c_i
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_commit_preedit_buf(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     if ctx.editor.is_selecting() {
         return ERROR;
@@ -1688,6 +1673,7 @@ pub unsafe extern "C" fn chewing_commit_preedit_buf(ctx: *mut ChewingContext) ->
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_clean_preedit_buf(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     if ctx.editor.is_selecting() {
         return ERROR;
@@ -1711,6 +1697,7 @@ pub unsafe extern "C" fn chewing_clean_preedit_buf(ctx: *mut ChewingContext) -> 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_clean_bopomofo_buf(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     ctx.editor.clear_syllable_editor();
     OK
@@ -1788,6 +1775,7 @@ pub unsafe extern "C" fn chewing_handle_KeyboardEvent(
     state: u32,
 ) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     // XXX hack for selkey
     let key = if ctx.editor.is_selecting() {
@@ -1843,6 +1831,7 @@ pub unsafe extern "C" fn chewing_handle_KeyboardEvent(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_Space(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     ctx.editor.process_keyevent(KeyboardEvent {
         code: KEY_SPACE,
@@ -1860,6 +1849,7 @@ pub unsafe extern "C" fn chewing_handle_Space(ctx: *mut ChewingContext) -> c_int
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_Esc(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     ctx.editor.process_keyevent(KeyboardEvent {
         code: KEY_ESC,
@@ -1877,6 +1867,7 @@ pub unsafe extern "C" fn chewing_handle_Esc(ctx: *mut ChewingContext) -> c_int {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_Enter(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     ctx.editor.process_keyevent(KeyboardEvent {
         code: KEY_ENTER,
@@ -1894,6 +1885,7 @@ pub unsafe extern "C" fn chewing_handle_Enter(ctx: *mut ChewingContext) -> c_int
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_Del(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     ctx.editor.process_keyevent(KeyboardEvent {
         code: KEY_DELETE,
@@ -1911,6 +1903,7 @@ pub unsafe extern "C" fn chewing_handle_Del(ctx: *mut ChewingContext) -> c_int {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_Backspace(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     ctx.editor.process_keyevent(KeyboardEvent {
         code: KEY_BACKSPACE,
@@ -1928,6 +1921,7 @@ pub unsafe extern "C" fn chewing_handle_Backspace(ctx: *mut ChewingContext) -> c
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_Tab(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     ctx.editor.process_keyevent(KeyboardEvent {
         code: KEY_TAB,
@@ -1945,6 +1939,7 @@ pub unsafe extern "C" fn chewing_handle_Tab(ctx: *mut ChewingContext) -> c_int {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_ShiftLeft(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     ctx.editor.process_keyevent(
         KeyboardEvent::builder()
@@ -1964,6 +1959,7 @@ pub unsafe extern "C" fn chewing_handle_ShiftLeft(ctx: *mut ChewingContext) -> c
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_Left(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     ctx.editor.process_keyevent(KeyboardEvent {
         code: KEY_LEFT,
@@ -1981,6 +1977,7 @@ pub unsafe extern "C" fn chewing_handle_Left(ctx: *mut ChewingContext) -> c_int 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_ShiftRight(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     ctx.editor.process_keyevent(
         KeyboardEvent::builder()
@@ -2000,6 +1997,7 @@ pub unsafe extern "C" fn chewing_handle_ShiftRight(ctx: *mut ChewingContext) -> 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_Right(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     ctx.editor.process_keyevent(KeyboardEvent {
         code: KEY_RIGHT,
@@ -2020,6 +2018,7 @@ pub unsafe extern "C" fn chewing_handle_Right(ctx: *mut ChewingContext) -> c_int
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_Up(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     ctx.editor.process_keyevent(KeyboardEvent {
         code: KEY_UP,
@@ -2037,6 +2036,7 @@ pub unsafe extern "C" fn chewing_handle_Up(ctx: *mut ChewingContext) -> c_int {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_Home(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     ctx.editor.process_keyevent(KeyboardEvent {
         code: KEY_HOME,
@@ -2054,6 +2054,7 @@ pub unsafe extern "C" fn chewing_handle_Home(ctx: *mut ChewingContext) -> c_int 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_End(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     ctx.editor.process_keyevent(KeyboardEvent {
         code: KEY_END,
@@ -2071,6 +2072,7 @@ pub unsafe extern "C" fn chewing_handle_End(ctx: *mut ChewingContext) -> c_int {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_PageUp(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     ctx.editor.process_keyevent(KeyboardEvent {
         code: KEY_PAGEUP,
@@ -2088,6 +2090,7 @@ pub unsafe extern "C" fn chewing_handle_PageUp(ctx: *mut ChewingContext) -> c_in
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_PageDown(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     ctx.editor.process_keyevent(KeyboardEvent {
         code: KEY_PAGEDOWN,
@@ -2107,6 +2110,7 @@ pub unsafe extern "C" fn chewing_handle_PageDown(ctx: *mut ChewingContext) -> c_
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_Down(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     ctx.editor.process_keyevent(KeyboardEvent {
         code: KEY_DOWN,
@@ -2124,6 +2128,7 @@ pub unsafe extern "C" fn chewing_handle_Down(ctx: *mut ChewingContext) -> c_int 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_Capslock(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     ctx.editor.process_keyevent(
         KeyboardEvent::builder()
@@ -2145,6 +2150,7 @@ pub unsafe extern "C" fn chewing_handle_Capslock(ctx: *mut ChewingContext) -> c_
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_Default(ctx: *mut ChewingContext, key: c_int) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     let evt = map_ascii(&ctx.keymap, key as u8);
 
@@ -2162,6 +2168,7 @@ pub unsafe extern "C" fn chewing_handle_Default(ctx: *mut ChewingContext, key: c
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_CtrlNum(ctx: *mut ChewingContext, key: c_int) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     let (code, ksym) = match key as u8 {
         b'0' => (KEY_0, SYM_0),
@@ -2195,6 +2202,7 @@ pub unsafe extern "C" fn chewing_handle_CtrlNum(ctx: *mut ChewingContext, key: c
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_ShiftSpace(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     ctx.editor.process_keyevent(
         KeyboardEvent::builder()
@@ -2213,7 +2221,8 @@ pub unsafe extern "C" fn chewing_handle_ShiftSpace(ctx: *mut ChewingContext) -> 
 /// This function should be called with valid pointers.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_DblTab(ctx: *mut ChewingContext) -> c_int {
-    let _ctx = as_mut_or_return!(ctx, ERROR);
+    let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     // todo!()
     OK
@@ -2230,6 +2239,7 @@ pub unsafe extern "C" fn chewing_handle_DblTab(ctx: *mut ChewingContext) -> c_in
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_handle_Numlock(ctx: *mut ChewingContext, key: c_int) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     let (code, ksym) = match key as u8 {
         b'0' => (KEY_KP0, SYM_KP0),
@@ -2270,6 +2280,7 @@ pub unsafe extern "C" fn chewing_handle_Numlock(ctx: *mut ChewingContext, key: c
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_commit_Check(ctx: *const ChewingContext) -> c_int {
     let ctx = as_ref_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     !ctx.editor.display_commit().is_empty() as c_int
 }
@@ -2293,6 +2304,7 @@ pub unsafe extern "C" fn chewing_commit_String(ctx: *const ChewingContext) -> *m
         ctx,
         owned_into_raw(Owned::CString, CString::default().into_raw())
     );
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     let buffer = ctx.editor.display_commit();
     let cstr = match CString::new(buffer) {
@@ -2314,6 +2326,7 @@ pub unsafe extern "C" fn chewing_commit_String(ctx: *const ChewingContext) -> *m
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_commit_String_static(ctx: *const ChewingContext) -> *const c_char {
     let ctx = as_mut_or_return!(ctx.cast_mut(), global_empty_cstr());
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     copy_cstr(&mut ctx.commit_buf, ctx.editor.display_commit())
 }
@@ -2337,6 +2350,7 @@ pub unsafe extern "C" fn chewing_buffer_String(ctx: *const ChewingContext) -> *m
         ctx,
         owned_into_raw(Owned::CString, CString::default().into_raw())
     );
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     let buffer = ctx.editor.display();
     let cstr = match CString::new(buffer) {
@@ -2358,6 +2372,7 @@ pub unsafe extern "C" fn chewing_buffer_String(ctx: *const ChewingContext) -> *m
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_buffer_String_static(ctx: *const ChewingContext) -> *const c_char {
     let ctx = as_mut_or_return!(ctx.cast_mut(), global_empty_cstr());
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     copy_cstr(&mut ctx.preedit_buf, &ctx.editor.display())
 }
@@ -2372,6 +2387,7 @@ pub unsafe extern "C" fn chewing_buffer_String_static(ctx: *const ChewingContext
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_buffer_Check(ctx: *const ChewingContext) -> c_int {
     let ctx = as_ref_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     !ctx.editor.is_empty() as c_int
 }
@@ -2389,6 +2405,7 @@ pub unsafe extern "C" fn chewing_buffer_Check(ctx: *const ChewingContext) -> c_i
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_buffer_Len(ctx: *const ChewingContext) -> c_int {
     let ctx = as_ref_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     ctx.editor.len() as c_int
 }
@@ -2407,6 +2424,7 @@ pub unsafe extern "C" fn chewing_bopomofo_String_static(
     ctx: *const ChewingContext,
 ) -> *const c_char {
     let ctx = as_mut_or_return!(ctx.cast_mut(), global_empty_cstr());
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     copy_cstr(&mut ctx.bopomofo_buf, &ctx.editor.syllable_buffer_display())
 }
@@ -2430,6 +2448,7 @@ pub unsafe extern "C" fn chewing_bopomofo_String(ctx: *const ChewingContext) -> 
         ctx,
         owned_into_raw(Owned::CString, CString::default().into_raw())
     );
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     let buffer = ctx.editor.syllable_buffer_display();
     let cstr = match CString::new(buffer) {
@@ -2449,6 +2468,7 @@ pub unsafe extern "C" fn chewing_bopomofo_String(ctx: *const ChewingContext) -> 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_bopomofo_Check(ctx: *const ChewingContext) -> c_int {
     let ctx = as_ref_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     ctx.editor.entering_syllable() as c_int
 }
@@ -2461,6 +2481,7 @@ pub unsafe extern "C" fn chewing_bopomofo_Check(ctx: *const ChewingContext) -> c
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_cursor_Current(ctx: *const ChewingContext) -> c_int {
     let ctx = as_ref_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     ctx.editor.cursor() as c_int
 }
@@ -2478,6 +2499,7 @@ pub unsafe extern "C" fn chewing_cursor_Current(ctx: *const ChewingContext) -> c
 #[deprecated(note = "The chewing_cand_TotalPage function could achieve the same effect.")]
 pub unsafe extern "C" fn chewing_cand_CheckDone(ctx: *const ChewingContext) -> c_int {
     let ctx = as_ref_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     if ctx.editor.is_selecting() {
         FALSE
@@ -2498,6 +2520,7 @@ pub unsafe extern "C" fn chewing_cand_CheckDone(ctx: *const ChewingContext) -> c
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_cand_TotalPage(ctx: *const ChewingContext) -> c_int {
     let ctx = as_ref_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     ctx.editor.total_page().unwrap_or_default() as c_int
 }
@@ -2512,6 +2535,7 @@ pub unsafe extern "C" fn chewing_cand_TotalPage(ctx: *const ChewingContext) -> c
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_cand_ChoicePerPage(ctx: *const ChewingContext) -> c_int {
     let ctx = as_ref_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     ctx.editor.editor_options().candidates_per_page as c_int
 }
@@ -2524,6 +2548,7 @@ pub unsafe extern "C" fn chewing_cand_ChoicePerPage(ctx: *const ChewingContext) 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_cand_TotalChoice(ctx: *const ChewingContext) -> c_int {
     let ctx = as_ref_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     match ctx.editor.all_candidates() {
         Ok(candidates) => candidates.len() as c_int,
@@ -2549,6 +2574,7 @@ pub unsafe extern "C" fn chewing_cand_TotalChoice(ctx: *const ChewingContext) ->
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_cand_CurrentPage(ctx: *const ChewingContext) -> c_int {
     let ctx = as_ref_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     ctx.editor.current_page_no().unwrap_or_default() as c_int
 }
@@ -2566,6 +2592,7 @@ pub unsafe extern "C" fn chewing_cand_CurrentPage(ctx: *const ChewingContext) ->
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_cand_Enumerate(ctx: *mut ChewingContext) {
     let ctx = as_mut_or_return!(ctx);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     if let Ok(candidates) = ctx.editor.paginated_candidates() {
         debug!("candidates: {candidates:?}");
@@ -2587,6 +2614,7 @@ pub unsafe extern "C" fn chewing_cand_Enumerate(ctx: *mut ChewingContext) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_cand_hasNext(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     if !ctx.editor.is_selecting() {
         return FALSE;
@@ -2617,6 +2645,7 @@ pub unsafe extern "C" fn chewing_cand_String(ctx: *mut ChewingContext) -> *mut c
         ctx,
         owned_into_raw(Owned::CString, CString::default().into_raw())
     );
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     match ctx.cand_iter.as_mut().and_then(|it| it.next()) {
         Some(phrase) => {
@@ -2644,6 +2673,7 @@ pub unsafe extern "C" fn chewing_cand_String(ctx: *mut ChewingContext) -> *mut c
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_cand_String_static(ctx: *mut ChewingContext) -> *const c_char {
     let ctx = as_mut_or_return!(ctx, global_empty_cstr());
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     match ctx.cand_iter.as_mut().and_then(|it| it.next()) {
         Some(phrase) => copy_cstr(&mut ctx.cand_buf, &phrase),
@@ -2675,6 +2705,7 @@ pub unsafe extern "C" fn chewing_cand_string_by_index(
         ctx,
         owned_into_raw(Owned::CString, CString::default().into_raw())
     );
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     if let Ok(phrases) = ctx.editor.all_candidates() {
         if let Some(phrase) = phrases.get(index as usize) {
@@ -2705,6 +2736,7 @@ pub unsafe extern "C" fn chewing_cand_string_by_index_static(
     index: c_int,
 ) -> *const c_char {
     let ctx = as_mut_or_return!(ctx, global_empty_cstr());
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     if let Ok(phrases) = ctx.editor.all_candidates() {
         if let Some(phrase) = phrases.get(index as usize) {
@@ -2734,6 +2766,7 @@ pub unsafe extern "C" fn chewing_cand_choose_by_index(
     index: c_int,
 ) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     match ctx.editor.select(index as usize) {
         Ok(_) => OK,
@@ -2753,6 +2786,7 @@ pub unsafe extern "C" fn chewing_cand_choose_by_index(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_cand_open(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     match ctx.editor.start_selecting() {
         Ok(_) => OK,
@@ -2770,6 +2804,7 @@ pub unsafe extern "C" fn chewing_cand_open(ctx: *mut ChewingContext) -> c_int {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_cand_close(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     match ctx.editor.cancel_selecting() {
         Ok(_) => OK,
@@ -2790,6 +2825,7 @@ pub unsafe extern "C" fn chewing_cand_close(ctx: *mut ChewingContext) -> c_int {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_interval_Enumerate(ctx: *mut ChewingContext) {
     let ctx = as_mut_or_return!(ctx);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     ctx.interval_iter = Some(
         (Box::new(ctx.editor.intervals().filter(|it| it.is_phrase))
@@ -2808,6 +2844,7 @@ pub unsafe extern "C" fn chewing_interval_Enumerate(ctx: *mut ChewingContext) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_interval_hasNext(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     ctx.interval_iter
         .as_mut()
@@ -2827,6 +2864,7 @@ pub unsafe extern "C" fn chewing_interval_hasNext(ctx: *mut ChewingContext) -> c
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_interval_Get(ctx: *mut ChewingContext, it: *mut IntervalType) {
     let ctx = as_mut_or_return!(ctx);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     let it = unsafe {
         match it.as_mut() {
@@ -2852,6 +2890,7 @@ pub unsafe extern "C" fn chewing_interval_Get(ctx: *mut ChewingContext, it: *mut
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_aux_Check(ctx: *const ChewingContext) -> c_int {
     let ctx = as_ref_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     !ctx.editor.notification().is_empty() as c_int
 }
@@ -2869,6 +2908,7 @@ pub unsafe extern "C" fn chewing_aux_Check(ctx: *const ChewingContext) -> c_int 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_aux_Length(ctx: *const ChewingContext) -> c_int {
     let ctx = as_ref_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     ctx.editor.notification().chars().count() as c_int
 }
@@ -2892,6 +2932,7 @@ pub unsafe extern "C" fn chewing_aux_String(ctx: *const ChewingContext) -> *mut 
         Some(ctx) => ctx,
         None => return owned_into_raw(Owned::CString, CString::default().into_raw()),
     };
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     let cstring =
         CString::new(ctx.editor.notification()).expect("notification should be valid UTF-8");
@@ -2910,6 +2951,7 @@ pub unsafe extern "C" fn chewing_aux_String(ctx: *const ChewingContext) -> *mut 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_aux_String_static(ctx: *const ChewingContext) -> *const c_char {
     let ctx = as_mut_or_return!(ctx.cast_mut(), global_empty_cstr());
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     copy_cstr(&mut ctx.aux_buf, ctx.editor.notification())
 }
@@ -2924,6 +2966,7 @@ pub unsafe extern "C" fn chewing_aux_String_static(ctx: *const ChewingContext) -
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_keystroke_CheckIgnore(ctx: *const ChewingContext) -> c_int {
     let ctx = as_ref_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     match ctx.editor.last_key_behavior() {
         EditorKeyBehavior::Ignore => TRUE,
@@ -2945,6 +2988,7 @@ pub unsafe extern "C" fn chewing_keystroke_CheckIgnore(ctx: *const ChewingContex
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_keystroke_CheckAbsorb(ctx: *const ChewingContext) -> c_int {
     let ctx = as_ref_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     match ctx.editor.last_key_behavior() {
         EditorKeyBehavior::Absorb => TRUE,
@@ -2979,6 +3023,7 @@ pub unsafe extern "C" fn chewing_kbtype_Total(_ctx: *const ChewingContext) -> c_
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_kbtype_Enumerate(ctx: *mut ChewingContext) {
     let ctx = as_mut_or_return!(ctx);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     ctx.kbcompat_iter = Some(
         (Box::new((0..).map_while(|id| KeyboardLayoutCompat::try_from(id).ok()))
@@ -2997,6 +3042,7 @@ pub unsafe extern "C" fn chewing_kbtype_Enumerate(ctx: *mut ChewingContext) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_kbtype_hasNext(ctx: *mut ChewingContext) -> c_int {
     let ctx = as_mut_or_return!(ctx, ERROR);
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     ctx.kbcompat_iter
         .as_mut()
@@ -3025,6 +3071,7 @@ pub unsafe extern "C" fn chewing_kbtype_String(ctx: *mut ChewingContext) -> *mut
         ctx,
         owned_into_raw(Owned::CString, CString::default().into_raw())
     );
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     match ctx.kbcompat_iter.as_mut().and_then(|it| it.next()) {
         Some(kb_compat) => {
@@ -3052,6 +3099,7 @@ pub unsafe extern "C" fn chewing_kbtype_String(ctx: *mut ChewingContext) -> *mut
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_kbtype_String_static(ctx: *mut ChewingContext) -> *const c_char {
     let ctx = as_mut_or_return!(ctx, global_empty_cstr());
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     match ctx.kbcompat_iter.as_mut().and_then(|it| it.next()) {
         Some(kb_compat) => copy_cstr(&mut ctx.kbtype_buf, &kb_compat.to_string()),
@@ -3105,6 +3153,7 @@ pub unsafe extern "C" fn chewing_zuin_String(
         ctx,
         owned_into_raw(Owned::CString, CString::default().into_raw())
     );
+    let _logger_guard = init_scoped_logging(ctx.logger_fn, ctx.logger_data);
 
     let syllable = ctx.editor.syllable_buffer_display();
     unsafe {

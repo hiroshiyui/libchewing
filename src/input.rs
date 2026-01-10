@@ -1,9 +1,9 @@
 //! Input handling modules
 
-use keycode::Keycode;
-use keysym::Keysym;
+use std::fmt::Display;
 
-use crate::input::keysym::SYM_NONE;
+use self::keycode::Keycode;
+use self::keysym::{Keysym, SYM_NONE};
 
 pub mod keycode;
 pub mod keymap;
@@ -142,6 +142,43 @@ impl KeyboardEvent {
     }
 }
 
+impl Display for KeyboardEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "#KeyboardEvent(")?;
+        write!(f, ":code {}", self.code.0)?;
+        write!(f, " :ksym {}", self.ksym.0)?;
+        if self.ksym.is_unicode() {
+            write!(f, " :char '{}'", self.ksym.to_unicode())?;
+        }
+        if self.state != 0 {
+            write!(f, " :state '")?;
+            if self.is_state_on(KeyState::Control) {
+                write!(f, "c")?;
+            }
+            if self.is_state_on(KeyState::Shift) {
+                write!(f, "s")?;
+            }
+            if self.is_state_on(KeyState::Alt) {
+                write!(f, "a")?;
+            }
+            if self.is_state_on(KeyState::Super) {
+                write!(f, "S")?;
+            }
+            if self.is_state_on(KeyState::CapsLock) {
+                write!(f, "C")?;
+            }
+            if self.is_state_on(KeyState::NumLock) {
+                write!(f, "N")?;
+            }
+            if self.is_state_on(KeyState::Release) {
+                write!(f, "R")?;
+            }
+        }
+        write!(f, ")")?;
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct KeyboardEventBuilder {
     evt: KeyboardEvent,
@@ -217,11 +254,10 @@ impl KeyboardEventBuilder {
 
 #[cfg(test)]
 mod tests {
-    use crate::input::KeyState;
-
     use super::KeyboardEvent;
     use super::keycode;
     use super::keysym;
+    use crate::input::KeyState;
 
     #[test]
     fn keyboard_event_builder() {

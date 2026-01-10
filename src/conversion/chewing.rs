@@ -1,14 +1,15 @@
 use std::{
-    collections::VecDeque,
+    collections::{BinaryHeap, HashSet},
     fmt::{Debug, Display, Write},
-    iter,
 };
 
 use log::trace;
 
-use crate::dictionary::{Dictionary, LookupStrategy, Phrase};
-
-use super::{Composition, ConversionEngine, Gap, Interval, Symbol};
+use super::{Composition, ConversionEngine, Gap, Interval, Outcome, Symbol};
+use crate::{
+    dictionary::{Dictionary, LookupStrategy, Phrase},
+    zhuyin::Syllable,
+};
 
 /// The default Chewing conversion method.
 #[derive(Debug, Default)]
@@ -28,60 +29,44 @@ impl ChewingEngine {
         &'a self,
         dict: &'a dyn Dictionary,
         comp: &'a Composition,
-    ) -> impl Iterator<Item = Vec<Interval>> + Clone + 'a {
-        iter::once_with(move || {
+    ) -> Vec<Outcome> {
+        let paths = {
             if comp.is_empty() {
-                return vec![PossiblePath::default()];
+                return vec![Outcome::default()];
             }
-            let intervals = self.find_intervals(dict, comp);
-            if intervals.is_empty() {
-                return vec![PossiblePath::default()];
+            let (edges, phrases) = self.find_edges(dict, comp);
+            if edges.is_empty() {
+                return vec![Outcome::default()];
             }
-            let intervals = log_softmax(intervals);
-            let paths = self.find_k_paths(Self::MAX_OUT_PATHS, comp.len(), intervals);
+            let mut paths = self.find_k_paths(Self::MAX_OUT_PATHS, comp.len(), edges, &phrases);
             trace!("paths: {:#?}", paths);
             debug_assert!(!paths.is_empty());
 
-            let mut trimmed_paths = self.trim_paths(paths);
-            debug_assert!(!trimmed_paths.is_empty());
-
-            trimmed_paths.sort_by(|a, b| b.cmp(a));
-            trimmed_paths
-        })
-        .flatten()
-        .map(|p| {
-            p.intervals
-                .into_iter()
-                .map(|it| it.into())
-                .fold(vec![], |acc, interval| glue_fn(comp, acc, interval))
-        })
+            // TODO: Reranking
+            paths.sort_by(|a, b| b.cmp(a));
+            paths
+        };
+        paths
+            .into_iter()
+            .map(|p| {
+                let log_prob = p.total_probability();
+                let intervals = p
+                    .intervals
+                    .into_iter()
+                    .map(|it| it.into())
+                    .fold(vec![], |acc, interval| glue_fn(comp, acc, interval));
+                Outcome {
+                    intervals,
+                    log_prob,
+                }
+            })
+            .collect()
     }
 }
 
-fn log_softmax(intervals: Vec<PossibleInterval>) -> Vec<PossibleInterval> {
-    let scale = 1e5; // max count in tsi.src was about 120,000
-    let x: Vec<f64> = intervals.iter().map(|v| v.phrase.freq() as f64).collect();
-    let shifted: Vec<f64> = x.iter().map(|&x| x / scale).collect();
-    let log_sum_exp = shifted.iter().map(|&v| v.exp()).sum::<f64>().ln();
-
-    let intervals = intervals
-        .into_iter()
-        .zip(shifted.into_iter())
-        .map(|(mut i, v)| {
-            i.weight = v - log_sum_exp;
-            i
-        })
-        .collect();
-    intervals
-}
-
 impl ConversionEngine for ChewingEngine {
-    fn convert<'a>(
-        &'a self,
-        dict: &'a dyn Dictionary,
-        comp: &'a Composition,
-    ) -> Box<dyn Iterator<Item = Vec<Interval>> + 'a> {
-        Box::new(ChewingEngine::convert(self, dict, comp))
+    fn convert<'a>(&'a self, dict: &'a dyn Dictionary, comp: &'a Composition) -> Vec<Outcome> {
+        ChewingEngine::convert(self, dict, comp)
     }
 }
 
@@ -97,13 +82,13 @@ fn glue_fn(com: &Composition, mut acc: Vec<Interval>, interval: Interval) -> Vec
     }
     if let Some(Gap::Glue) = com.gap(last.end) {
         let last = acc.pop().expect("acc should have at least one item");
-        let mut phrase = last.str.into_string();
-        phrase.push_str(&interval.str);
+        let mut phrase = last.text.into_string();
+        phrase.push_str(&interval.text);
         acc.push(Interval {
             start: last.start,
             end: interval.end,
             is_phrase: true,
-            str: phrase.into_boxed_str(),
+            text: phrase.into_boxed_str(),
         })
     } else {
         acc.push(interval);
@@ -112,13 +97,13 @@ fn glue_fn(com: &Composition, mut acc: Vec<Interval>, interval: Interval) -> Vec
 }
 
 impl ChewingEngine {
-    fn find_best_phrase<D: Dictionary + ?Sized>(
+    fn find_best_phrases<D: Dictionary + ?Sized>(
         &self,
         dict: &D,
         start: usize,
         symbols: &[Symbol],
         com: &Composition,
-    ) -> Option<PossiblePhrase> {
+    ) -> Vec<PossiblePhrase> {
         let end = start + symbols.len();
 
         for i in (start..end).skip(1) {
@@ -126,7 +111,7 @@ impl ChewingEngine {
                 // There exists a break point that forbids connecting these
                 // syllables.
                 trace!("No best phrase for {:?} due to break point", symbols);
-                return None;
+                return vec![];
             }
         }
 
@@ -137,80 +122,108 @@ impl ChewingEngine {
                     "No best phrase for {:?} due to selection {:?}",
                     symbols, selection
                 );
-                return None;
+                return vec![];
             }
         }
 
-        if symbols.len() == 1 && symbols[0].is_char() {
-            return Some(symbols[0].into());
+        if symbols.len() == 1
+            && let Some(sym) = symbols[0].to_char()
+        {
+            return vec![PossiblePhrase::Symbol(sym)];
         }
 
         if symbols.iter().any(|sym| sym.is_char()) {
-            return None;
+            return vec![];
         }
 
-        let mut max_freq = 0;
-        let mut best_phrase = None;
-        'next_phrase: for phrase in dict.lookup_all_phrases(&symbols, self.lookup_strategy) {
-            // If there exists a user selected interval which is a
-            // sub-interval of this phrase but the substring is
-            // different then we can skip this phrase.
-            for selection in &com.selections {
-                debug_assert!(!selection.str.is_empty());
-                if start <= selection.start && end >= selection.end {
-                    let offset = selection.start - start;
-                    let len = selection.end - selection.start;
-                    let substring: String =
-                        phrase.as_str().chars().skip(offset).take(len).collect();
-                    if substring != selection.str.as_ref() {
-                        continue 'next_phrase;
+        let syllables: Vec<Syllable> = symbols
+            .iter()
+            .map(|s| s.to_syllable().unwrap_or_default())
+            .collect();
+
+        let max_phrases_count = 10;
+        // Approximate value. We only use this global for scaling for now, so we can
+        // use any value.
+        let global_total: f64 = 1_000_000_000.0;
+        let mut phrases = dict
+            .lookup(&syllables, self.lookup_strategy)
+            .into_iter()
+            .filter(|phrase| {
+                // If there exists a user selected interval which is a
+                // sub-interval of this phrase but the substring is
+                // different then we can skip this phrase.
+                for selection in &com.selections {
+                    debug_assert!(!selection.text.is_empty());
+                    if start <= selection.start && end >= selection.end {
+                        let offset = selection.start - start;
+                        let len = selection.end - selection.start;
+                        let substring: String =
+                            phrase.as_str().chars().skip(offset).take(len).collect();
+                        if substring != selection.text.as_ref() {
+                            return false;
+                        }
                     }
                 }
-            }
+                true
+            })
+            .map(|phrase| {
+                let log_phrase_prob = (phrase.freq().clamp(1, 9999999) as f64 / global_total).ln();
+                let log_length_prob: f64 = match syllables.len() {
+                    // log probability of phrase lenght calculated from tsi.src
+                    1 => -1.520439227173415,
+                    2 => -0.4236568120124837,
+                    3 => -1.455835986003893,
+                    4 => -1.6178072894679227,
+                    5 => -4.425765184802149,
+                    _ => -4.787357595622411,
+                };
+                let log_prob = log_phrase_prob + log_length_prob;
+                debug_assert!(log_prob.is_normal());
+                PossiblePhrase::Phrase(phrase, log_prob)
+            })
+            .collect::<Vec<_>>();
+        phrases.sort_by(|a, b| f64::total_cmp(&-a.log_prob(), &-b.log_prob()));
+        phrases.truncate(max_phrases_count);
 
-            // If there are phrases that can satisfy all the constraints
-            // then pick the one with highest frequency.
-            if !(phrase.freq() > max_freq || best_phrase.is_none()) {
-                continue;
-            }
-            max_freq = phrase.freq();
-            best_phrase = Some(phrase.into());
-        }
-
-        if best_phrase.is_none() {
+        if phrases.is_empty() {
             // try to find if there's a forced selection
             for selection in &com.selections {
                 if start == selection.start && end == selection.end {
-                    best_phrase = Some(Phrase::new(selection.str.clone(), 0).into());
+                    phrases = vec![PossiblePhrase::Phrase(
+                        Phrase::new(selection.text.clone(), 0),
+                        0.0,
+                    )];
                     break;
                 }
             }
         }
 
-        trace!("best phrace for {:?} is {:?}", symbols, best_phrase);
-        best_phrase
+        trace!("best phraces for {:?} is {:?}", symbols, phrases);
+        phrases
     }
-    fn find_intervals<D: Dictionary + ?Sized>(
+    fn find_edges<D: Dictionary + ?Sized>(
         &self,
         dict: &D,
         com: &Composition,
-    ) -> Vec<PossibleInterval> {
-        let mut intervals = vec![];
+    ) -> (Vec<Edge>, Vec<PossiblePhrase>) {
+        let mut sn = 0;
+        let mut edges = vec![];
+        let mut phrases = vec![];
         for start in 0..com.symbols.len() {
             for end in (start + 1)..=com.symbols.len() {
-                if let Some(phrase) =
-                    self.find_best_phrase(dict, start, &com.symbols[start..end], com)
-                {
-                    intervals.push(PossibleInterval {
+                for phrase in self.find_best_phrases(dict, start, &com.symbols[start..end], com) {
+                    edges.push(Edge {
                         start,
                         end,
-                        phrase,
-                        weight: 0.0,
+                        sn,
+                        cost: -phrase.log_prob(),
                     });
+                    phrases.push(phrase);
+                    sn += 1;
                 }
             }
         }
-        intervals
+        (edges, phrases)
     }
 
     /// Find K possible best alternative paths.
@@ -223,14 +236,15 @@ impl ChewingEngine {
         &self,
         k: usize,
         len: usize,
-        intervals: Vec<PossibleInterval>,
+        edges: Vec<Edge>,
+        phrases: &[PossiblePhrase],
     ) -> Vec<PossiblePath> {
         let mut ksp = Vec::with_capacity(k);
         let mut candidates = vec![];
         let mut graph = vec![vec![]; len];
-        let mut removed_edges = vec![false; len * len];
+        let mut removed_edges = HashSet::new();
 
-        for edge in intervals.into_iter() {
+        for edge in edges.into_iter() {
             graph[edge.start].push(edge);
         }
         ksp.push(self.shortest_path(&graph, &removed_edges, 0, len).unwrap());
@@ -243,7 +257,7 @@ impl ChewingEngine {
 
                 for p in &ksp {
                     if i < p.len() {
-                        removed_edges[p[i].start * len + p[i].end - 1] = true;
+                        removed_edges.insert(p[i].sn);
                     }
                 }
 
@@ -263,92 +277,87 @@ impl ChewingEngine {
             ksp.push(candidates.swap_remove(0));
         }
         ksp.into_iter()
+            .map(|edges| {
+                edges
+                    .into_iter()
+                    .map(|edge| {
+                        let Edge {
+                            start,
+                            end,
+                            sn,
+                            cost: _,
+                        } = edge;
+                        let phrase = phrases[sn].clone();
+                        PossibleInterval { start, end, phrase }
+                    })
+                    .collect()
+            })
             .map(|intervals| PossiblePath { intervals })
             .collect()
     }
 
     fn shortest_path(
         &self,
-        graph: &[Vec<PossibleInterval>],
-        removed_edges: &[bool],
+        graph: &[Vec<Edge>],
+        removed_edges: &HashSet<usize>,
         source: usize,
-        len: usize,
-    ) -> Option<Vec<PossibleInterval>> {
-        let mut parent = vec![None; len + 1];
-        let mut queue = VecDeque::new();
-        queue.push_back(source);
-        'bfs: while !queue.is_empty() {
-            let node = queue.pop_front().unwrap();
-            if let Some(next_edges) = graph.get(node) {
-                for edge in next_edges {
-                    if removed_edges[edge.start * len + edge.end - 1] {
+        goal: usize,
+    ) -> Option<Vec<Edge>> {
+        let mut back_link: Vec<Option<Edge>> = vec![None; goal + 1];
+        let mut frontier = BinaryHeap::new();
+        frontier.push(FrontierNode {
+            position: source,
+            cost: 0.0,
+        });
+        while let Some(FrontierNode { position, cost }) = frontier.pop() {
+            if position == goal {
+                break;
+            }
+            if back_link[position].is_some_and(|prev| cost > prev.cost) {
+                continue;
+            }
+            if let Some(neighbor_edges) = graph.get(position) {
+                for edge in neighbor_edges {
+                    if removed_edges.contains(&edge.sn) {
                         continue;
                     }
-                    if parent[edge.end].is_none() {
-                        parent[edge.end] = Some(edge);
-                        queue.push_back(edge.end);
-                    }
-                    if edge.end == len {
-                        break 'bfs;
+                    let alt = FrontierNode {
+                        position: edge.end,
+                        cost: cost + edge.cost,
+                    };
+                    if back_link[alt.position].is_none_or(|prev| alt.cost < prev.cost) {
+                        back_link[alt.position] = Some(Edge {
+                            cost: alt.cost,
+                            ..*edge
+                        });
+                        frontier.push(alt);
                     }
                 }
             }
         }
         let mut path = vec![];
-        let mut node = len;
+        let mut node = goal;
         while node != source {
-            let interval = parent[node]?;
-            node = interval.start;
-            path.push(interval.clone());
+            let edge = back_link[node]?;
+            node = edge.start;
+            path.push(edge);
         }
         path.reverse();
         Some(path)
     }
-
-    /// Trim some paths that were part of other paths
-    ///
-    /// Ported from original C implementation, but the original algorithm seems wrong.
-    fn trim_paths(&self, paths: Vec<PossiblePath>) -> Vec<PossiblePath> {
-        let mut trimmed_paths: Vec<PossiblePath> = vec![];
-        for candidate in paths.into_iter() {
-            trace!("Trim check {}", candidate);
-            let mut drop_candidate = false;
-            let mut keeper = vec![];
-            for p in trimmed_paths.into_iter() {
-                if drop_candidate || p.contains(&candidate) {
-                    drop_candidate = true;
-                    trace!("  Keep {}", p);
-                    keeper.push(p);
-                    continue;
-                }
-                if candidate.contains(&p) {
-                    trace!("  Drop {}", p);
-                    continue;
-                }
-                trace!("  Keep {}", p);
-                keeper.push(p);
-            }
-            if !drop_candidate {
-                trace!("  Keep {}", candidate);
-                keeper.push(candidate);
-            }
-            trimmed_paths = keeper;
-        }
-        trimmed_paths
-    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 enum PossiblePhrase {
-    Symbol(Symbol),
-    Phrase(Phrase),
+    Symbol(char),
+    Phrase(Phrase, f64),
 }
 
 impl PossiblePhrase {
-    fn freq(&self) -> u32 {
+    fn log_prob(&self) -> f64 {
         match self {
-            PossiblePhrase::Symbol(_) => 0,
-            PossiblePhrase::Phrase(phrase) => phrase.freq(),
+            PossiblePhrase::Symbol(_) => 0.0,
+            PossiblePhrase::Phrase(_, log_prob) => *log_prob,
         }
     }
 }
@@ -356,30 +365,58 @@ impl PossiblePhrase {
 impl Display for PossiblePhrase {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PossiblePhrase::Symbol(sym) => f.write_char(sym.to_char().unwrap()),
-            PossiblePhrase::Phrase(phrase) => f.write_str(phrase.as_str()),
+            PossiblePhrase::Symbol(sym) => f.write_char(*sym),
+            PossiblePhrase::Phrase(phrase, _) => f.write_str(phrase.as_str()),
         }
-    }
-}
-
-impl From<Phrase> for PossiblePhrase {
-    fn from(value: Phrase) -> Self {
-        PossiblePhrase::Phrase(value)
-    }
-}
-
-impl From<Symbol> for PossiblePhrase {
-    fn from(value: Symbol) -> Self {
-        PossiblePhrase::Symbol(value)
     }
 }
 
 impl From<PossiblePhrase> for Box<str> {
     fn from(value: PossiblePhrase) -> Self {
         match value {
-            PossiblePhrase::Symbol(sym) => sym.to_char().unwrap().to_string().into_boxed_str(),
-            PossiblePhrase::Phrase(phrase) => phrase.into(),
+            PossiblePhrase::Symbol(sym) => sym.to_string().into_boxed_str(),
+            PossiblePhrase::Phrase(phrase, _) => phrase.into(),
         }
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+struct FrontierNode {
+    position: usize,
+    cost: f64,
+}
+
+impl Ord for FrontierNode {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        other.cost.total_cmp(&self.cost)
+    }
+}
+
+impl PartialOrd for FrontierNode {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Eq for FrontierNode {}
+
+impl PartialEq for FrontierNode {
+    fn eq(&self, other: &Self) -> bool {
+        self.position == other.position
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+struct Edge {
+    start: usize,
+    end: usize,
+    sn: usize,
+    cost: f64,
+}
+
+impl PartialEq for Edge {
+    fn eq(&self, other: &Self) -> bool {
+        self.sn == other.sn
     }
 }
 
@@ -388,7 +425,6 @@ struct PossibleInterval {
     start: usize,
     end: usize,
     phrase: PossiblePhrase,
-    weight: f64,
 }
 
 impl Debug for PossibleInterval {
@@ -396,17 +432,7 @@ impl Debug for PossibleInterval {
         f.debug_tuple("I")
             .field(&(self.start..self.end))
             .field(&self.phrase)
-            .field(&self.weight)
             .finish()
-    }
-}
-
-impl PossibleInterval {
-    fn contains(&self, other: &PossibleInterval) -> bool {
-        self.start <= other.start && self.end >= other.end
-    }
-    fn len(&self) -> usize {
-        self.end - self.start
     }
 }
 
@@ -417,9 +443,9 @@ impl From<PossibleInterval> for Interval {
             end: value.end,
             is_phrase: match value.phrase {
                 PossiblePhrase::Symbol(_) => false,
-                PossiblePhrase::Phrase(_) => true,
+                PossiblePhrase::Phrase(_, _) => true,
             },
-            str: value.phrase.into(),
+            text: value.phrase.into(),
         }
     }
 }
@@ -432,8 +458,6 @@ struct PossiblePath {
 impl Debug for PossiblePath {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PossiblePath")
-            .field("phrase_log_probability()", &self.phrase_log_probability())
-            .field("length_log_probability()", &self.length_log_probability())
             .field("total_probability()", &self.total_probability())
             .field("intervals", &self.intervals)
             .finish()
@@ -442,45 +466,12 @@ impl Debug for PossiblePath {
 
 impl PossiblePath {
     fn total_probability(&self) -> f64 {
-        self.phrase_log_probability() + self.length_log_probability()
+        let prob = self.phrase_log_probability();
+        debug_assert!(!prob.is_nan());
+        prob
     }
-
-    /// Copied from IsRecContain to trim some paths
-    fn contains(&self, other: &Self) -> bool {
-        let mut big = 0;
-        for sml in 0..other.intervals.len() {
-            loop {
-                if big < self.intervals.len()
-                    && self.intervals[big].start < other.intervals[sml].end
-                {
-                    if self.intervals[big].contains(&other.intervals[sml]) {
-                        break;
-                    }
-                } else {
-                    return false;
-                }
-                big += 1;
-            }
-        }
-        true
-    }
-
     fn phrase_log_probability(&self) -> f64 {
-        self.intervals.iter().map(|it| it.weight).sum()
-    }
-    fn length_log_probability(&self) -> f64 {
-        self.intervals
-            .iter()
-            .map(|it| match it.len() {
-                // log probability of phrase lenght calculated from tsi.src
-                1 => -1.520439227173415,
-                2 => -0.4236568120124837,
-                3 => -1.455835986003893,
-                4 => -1.6178072894679227,
-                5 => -4.425765184802149,
-                _ => -4.787357595622411,
-            })
-            .sum()
+        self.intervals.iter().map(|it| it.phrase.log_prob()).sum()
     }
 }
 
@@ -522,14 +513,15 @@ impl Display for PossiblePath {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
+    use super::ChewingEngine;
     use crate::{
-        conversion::{Composition, Gap, Interval, Symbol},
-        dictionary::{Dictionary, Phrase, TrieBuf},
+        conversion::{Composition, Gap, Interval, Outcome, Symbol, chewing::Edge},
+        dictionary::{Dictionary, TrieBuf},
         syl,
         zhuyin::Bopomofo::*,
     };
-
-    use super::{ChewingEngine, PossibleInterval, PossiblePath};
 
     fn test_dictionary() -> impl Dictionary {
         TrieBuf::from([
@@ -576,13 +568,111 @@ mod tests {
     }
 
     #[test]
+    fn simple_shortest_path() {
+        let engine = ChewingEngine::new();
+        let graph = vec![
+            vec![
+                Edge {
+                    start: 0,
+                    end: 1,
+                    sn: 0,
+                    cost: 1.0,
+                },
+                Edge {
+                    start: 0,
+                    end: 2,
+                    sn: 2,
+                    cost: 3.0,
+                },
+            ],
+            vec![Edge {
+                start: 1,
+                end: 2,
+                sn: 1,
+                cost: 1.0,
+            }],
+        ];
+        let removed_edges = HashSet::new();
+
+        assert_eq!(
+            Some(vec![
+                Edge {
+                    start: 0,
+                    end: 1,
+                    sn: 0,
+                    cost: 1.0,
+                },
+                Edge {
+                    start: 1,
+                    end: 2,
+                    sn: 1,
+                    cost: 1.0,
+                }
+            ]),
+            engine.shortest_path(&graph, &removed_edges, 0, 2)
+        );
+    }
+
+    #[test]
+    fn multi_edge_shortest_path() {
+        let engine = ChewingEngine::new();
+        let graph = vec![
+            vec![
+                Edge {
+                    start: 0,
+                    end: 1,
+                    sn: 0,
+                    cost: 1.0,
+                },
+                Edge {
+                    start: 0,
+                    end: 1,
+                    sn: 3,
+                    cost: 2.0,
+                },
+                Edge {
+                    start: 0,
+                    end: 2,
+                    sn: 2,
+                    cost: 3.0,
+                },
+            ],
+            vec![Edge {
+                start: 1,
+                end: 2,
+                sn: 1,
+                cost: 1.0,
+            }],
+        ];
+        let removed_edges = HashSet::new();
+
+        assert_eq!(
+            Some(vec![
+                Edge {
+                    start: 0,
+                    end: 1,
+                    sn: 0,
+                    cost: 1.0,
+                },
+                Edge {
+                    start: 1,
+                    end: 2,
+                    sn: 1,
+                    cost: 1.0,
+                }
+            ]),
+            engine.shortest_path(&graph, &removed_edges, 0, 2)
+        );
+    }
+
+    #[test]
     fn convert_empty_composition() {
         let dict = test_dictionary();
         let engine = ChewingEngine::new();
         let composition = Composition::new();
         assert_eq!(
-            Some(Vec::<Interval>::new()),
-            engine.convert(&dict, &composition).next()
+            vec![Outcome::default()],
+            engine.convert(&dict, &composition)
         );
     }
 
@@ -590,8 +680,7 @@ mod tests {
     #[test]
     fn convert_zero_length_entry() {
         let mut dict = test_dictionary();
-        let dict_mut = dict.as_dict_mut().unwrap();
-        dict_mut.add_phrase(&[], ("", 0).into()).unwrap();
+        dict.add_phrase(&[], ("", 0).into()).unwrap();
         let engine = ChewingEngine::new();
         let mut composition = Composition::new();
         for sym in [
@@ -601,13 +690,13 @@ mod tests {
             composition.push(sym);
         }
         assert_eq!(
-            Some(vec![Interval {
+            vec![Interval {
                 start: 0,
                 end: 2,
                 is_phrase: true,
-                str: "測試".into()
-            },]),
-            engine.convert(&dict, &composition).next()
+                text: "測試".into()
+            }],
+            engine.convert(&dict, &composition)[0].intervals
         );
     }
 
@@ -627,27 +716,27 @@ mod tests {
             composition.push(sym);
         }
         assert_eq!(
-            Some(vec![
+            vec![
                 Interval {
                     start: 0,
                     end: 2,
                     is_phrase: true,
-                    str: "國民".into()
+                    text: "國民".into()
                 },
                 Interval {
                     start: 2,
                     end: 4,
                     is_phrase: true,
-                    str: "大會".into()
+                    text: "大會".into()
                 },
                 Interval {
                     start: 4,
                     end: 6,
                     is_phrase: true,
-                    str: "代表".into()
+                    text: "代表".into()
                 },
-            ]),
-            engine.convert(&dict, &composition).next()
+            ],
+            engine.convert(&dict, &composition)[0].intervals
         );
     }
 
@@ -669,39 +758,39 @@ mod tests {
         composition.set_gap(1, Gap::Break);
         composition.set_gap(5, Gap::Break);
         assert_eq!(
-            Some(vec![
+            vec![
                 Interval {
                     start: 0,
                     end: 1,
                     is_phrase: true,
-                    str: "國".into()
+                    text: "國".into()
                 },
                 Interval {
                     start: 1,
                     end: 2,
                     is_phrase: true,
-                    str: "民".into()
+                    text: "民".into()
                 },
                 Interval {
                     start: 2,
                     end: 4,
                     is_phrase: true,
-                    str: "大會".into()
+                    text: "大會".into()
                 },
                 Interval {
                     start: 4,
                     end: 5,
                     is_phrase: true,
-                    str: "代".into()
+                    text: "代".into()
                 },
                 Interval {
                     start: 5,
                     end: 6,
                     is_phrase: true,
-                    str: "表".into()
+                    text: "表".into()
                 },
-            ]),
-            engine.convert(&dict, &composition).next()
+            ],
+            engine.convert(&dict, &composition)[0].intervals
         );
     }
 
@@ -724,30 +813,30 @@ mod tests {
             start: 4,
             end: 6,
             is_phrase: true,
-            str: "戴錶".into(),
+            text: "戴錶".into(),
         });
         assert_eq!(
-            Some(vec![
+            vec![
                 Interval {
                     start: 0,
                     end: 2,
                     is_phrase: true,
-                    str: "國民".into()
+                    text: "國民".into()
                 },
                 Interval {
                     start: 2,
                     end: 4,
                     is_phrase: true,
-                    str: "大會".into()
+                    text: "大會".into()
                 },
                 Interval {
                     start: 4,
                     end: 6,
                     is_phrase: true,
-                    str: "戴錶".into()
+                    text: "戴錶".into()
                 },
-            ]),
-            engine.convert(&dict, &composition).next()
+            ],
+            engine.convert(&dict, &composition)[0].intervals
         );
     }
 
@@ -767,16 +856,16 @@ mod tests {
             start: 1,
             end: 3,
             is_phrase: true,
-            str: "酷音".into(),
+            text: "酷音".into(),
         });
         assert_eq!(
-            Some(vec![Interval {
+            vec![Interval {
                 start: 0,
                 end: 3,
                 is_phrase: true,
-                str: "新酷音".into()
-            },]),
-            engine.convert(&dict, &composition).next()
+                text: "新酷音".into()
+            }],
+            engine.convert(&dict, &composition)[0].intervals
         );
     }
 
@@ -796,33 +885,33 @@ mod tests {
                 start: 0,
                 end: 1,
                 is_phrase: true,
-                str: "代".into(),
+                text: "代".into(),
             },
             Interval {
                 start: 1,
                 end: 2,
                 is_phrase: true,
-                str: "錶".into(),
+                text: "錶".into(),
             },
         ] {
             composition.push_selection(interval);
         }
         assert_eq!(
-            Some(vec![
+            vec![
                 Interval {
                     start: 0,
                     end: 1,
                     is_phrase: true,
-                    str: "代".into()
+                    text: "代".into()
                 },
                 Interval {
                     start: 1,
                     end: 2,
                     is_phrase: true,
-                    str: "錶".into()
+                    text: "錶".into()
                 }
-            ]),
-            engine.convert(&dict, &composition).next()
+            ],
+            engine.convert(&dict, &composition)[0].intervals
         );
     }
 
@@ -840,38 +929,38 @@ mod tests {
             composition.push(sym);
         }
         assert_eq!(
-            Some(vec![
+            vec![
                 Interval {
                     start: 0,
                     end: 2,
                     is_phrase: true,
-                    str: "測試".into()
+                    text: "測試".into()
                 },
                 Interval {
                     start: 2,
                     end: 4,
                     is_phrase: true,
-                    str: "一下".into()
+                    text: "一下".into()
                 }
-            ]),
-            engine.convert(&dict, &composition).next()
+            ],
+            engine.convert(&dict, &composition)[0].intervals
         );
         assert_eq!(
-            Some(vec![
+            vec![
                 Interval {
                     start: 0,
                     end: 3,
                     is_phrase: true,
-                    str: "測試儀".into()
+                    text: "測試儀".into()
                 },
                 Interval {
                     start: 3,
                     end: 4,
                     is_phrase: true,
-                    str: "下".into()
+                    text: "下".into()
                 }
-            ]),
-            engine.convert(&dict, &composition).nth(1)
+            ],
+            engine.convert(&dict, &composition)[1].intervals
         );
         assert_eq!(
             Some(vec![
@@ -879,16 +968,21 @@ mod tests {
                     start: 0,
                     end: 2,
                     is_phrase: true,
-                    str: "測試".into()
+                    text: "測試".into()
                 },
                 Interval {
                     start: 2,
                     end: 4,
                     is_phrase: true,
-                    str: "一下".into()
+                    text: "一下".into()
                 }
             ]),
-            engine.convert(&dict, &composition).cycle().nth(2)
+            engine
+                .convert(&dict, &composition)
+                .into_iter()
+                .cycle()
+                .nth(2)
+                .map(|p| p.intervals)
         );
     }
 
@@ -900,60 +994,8 @@ mod tests {
         for _ in 0..80 {
             composition.push(Symbol::from(syl![H, A]));
         }
-        assert_eq!(
-            40,
-            engine.convert(&dict, &composition).next().unwrap().len()
-        );
-        assert_eq!(
-            41,
-            engine.convert(&dict, &composition).nth(1).unwrap().len()
-        );
-        assert_eq!(
-            41,
-            engine.convert(&dict, &composition).nth(2).unwrap().len()
-        );
-    }
-
-    #[test]
-    fn possible_path_contains() {
-        let path_1 = PossiblePath {
-            intervals: vec![
-                PossibleInterval {
-                    start: 0,
-                    end: 2,
-                    phrase: Phrase::new("測試", 0).into(),
-                    weight: 0.0,
-                },
-                PossibleInterval {
-                    start: 2,
-                    end: 4,
-                    phrase: Phrase::new("一下", 0).into(),
-                    weight: 0.0,
-                },
-            ],
-        };
-        let path_2 = PossiblePath {
-            intervals: vec![
-                PossibleInterval {
-                    start: 0,
-                    end: 2,
-                    phrase: Phrase::new("測試", 0).into(),
-                    weight: 0.0,
-                },
-                PossibleInterval {
-                    start: 2,
-                    end: 3,
-                    phrase: Phrase::new("遺", 0).into(),
-                    weight: 0.0,
-                },
-                PossibleInterval {
-                    start: 3,
-                    end: 4,
-                    phrase: Phrase::new("下", 0).into(),
-                    weight: 0.0,
-                },
-            ],
-        };
-        assert!(path_1.contains(&path_2));
+        assert_eq!(40, engine.convert(&dict, &composition)[0].intervals.len());
+        assert_eq!(41, engine.convert(&dict, &composition)[1].intervals.len());
+        assert_eq!(41, engine.convert(&dict, &composition)[2].intervals.len());
     }
 }

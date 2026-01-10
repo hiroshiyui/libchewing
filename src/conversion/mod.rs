@@ -1,25 +1,20 @@
 //! Algorithms to convert syllables to Chinese characters.
 
-mod chewing;
-mod fuzzy;
-mod simple;
-mod symbol;
-
 use std::{
-    borrow::Cow,
     cmp::{max, min},
     fmt::Debug,
-};
-
-use crate::{
-    dictionary::Dictionary,
-    zhuyin::{Syllable, SyllableSlice},
 };
 
 pub use self::chewing::ChewingEngine;
 pub use self::fuzzy::FuzzyChewingEngine;
 pub use self::simple::SimpleEngine;
 pub(crate) use self::symbol::{full_width_symbol_input, special_symbol_input};
+use crate::{dictionary::Dictionary, zhuyin::Syllable};
+
+mod chewing;
+mod fuzzy;
+mod simple;
+mod symbol;
 
 /// Converts a composition buffer to list of intervals.
 ///
@@ -27,11 +22,13 @@ pub(crate) use self::symbol::{full_width_symbol_input, special_symbol_input};
 /// put intervals should cover the whole range of inputs, sorted in first in
 /// first out order.
 pub trait ConversionEngine: Debug {
-    fn convert<'a>(
-        &'a self,
-        dict: &'a dyn Dictionary,
-        comp: &'a Composition,
-    ) -> Box<dyn Iterator<Item = Vec<Interval>> + 'a>;
+    fn convert<'a>(&'a self, dict: &'a dyn Dictionary, comp: &'a Composition) -> Vec<Outcome>;
+}
+
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct Outcome {
+    pub(crate) intervals: Vec<Interval>,
+    pub(crate) log_prob: f64,
 }
 
 /// Output of conversion.
@@ -46,14 +43,14 @@ pub struct Interval {
     /// Whether the output is a phrase from dictionary or just symbols.
     pub is_phrase: bool,
     /// The output string.
-    pub str: Box<str>,
+    pub text: Box<str>,
 }
 
 impl Debug for Interval {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("I")
             .field(&(self.start..self.end))
-            .field(&self.str)
+            .field(&self.text)
             .finish()
     }
 }
@@ -147,30 +144,6 @@ impl From<Syllable> for Symbol {
 impl From<char> for Symbol {
     fn from(value: char) -> Self {
         Symbol::Char(value)
-    }
-}
-
-impl SyllableSlice for &[Symbol] {
-    fn to_slice(&self) -> Cow<'static, [Syllable]> {
-        self.iter()
-            .map_while(|&sym| match sym {
-                Symbol::Syllable(syl) => Some(syl),
-                Symbol::Char(_) => None,
-            })
-            .collect::<Vec<_>>()
-            .into()
-    }
-}
-
-impl SyllableSlice for Vec<Symbol> {
-    fn to_slice(&self) -> Cow<'static, [Syllable]> {
-        self.iter()
-            .map_while(|&sym| match sym {
-                Symbol::Syllable(syl) => Some(syl),
-                Symbol::Char(_) => None,
-            })
-            .collect::<Vec<_>>()
-            .into()
     }
 }
 

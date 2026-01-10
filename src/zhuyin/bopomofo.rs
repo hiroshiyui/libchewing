@@ -116,7 +116,7 @@ pub enum Bopomofo {
     TONE1,
 }
 
-use Bopomofo::*;
+use self::Bopomofo::*;
 
 const INITIAL_MAP: [Bopomofo; 21] = [
     B, P, M, F, D, T, N, L, G, K, H, J, Q, X, ZH, CH, SH, R, Z, C, S,
@@ -400,9 +400,8 @@ impl TryFrom<char> for Bopomofo {
 
 #[cfg(test)]
 mod tests {
-    use crate::zhuyin::{BopomofoErrorKind, ParseBopomofoError};
-
     use super::Bopomofo;
+    use crate::zhuyin::{BopomofoErrorKind, ParseBopomofoError};
 
     #[test]
     fn parse() {
