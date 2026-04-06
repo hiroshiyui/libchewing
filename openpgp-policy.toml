@@ -1,5 +1,8 @@
 version = 0
-commit_goodlist = []
+commit_goodlist = [
+    "05ae6bcb9309c466a1b32d69c146bc583be04747",
+    "80453b62c02853c4b4bf2374bdcf84a8efc8bdfd",
+]
 
 [authorization."Kan-Ru Chen <kanru@kanru.info>"]
 sign_commit = true
