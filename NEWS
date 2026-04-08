@@ -1,6 +1,9 @@
 What's New in libchewing (unreleased)
 ---------------------------------------------------------
 
+* Bug Fixes
+  - dict: ensure user dictionary overrides other builtin dictionaries.
+    (introduced in 0.12.0)
 
 
 What's New in libchewing 0.12.0 (April 6, 2026)

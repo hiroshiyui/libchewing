@@ -251,7 +251,7 @@ impl Editor {
             }
         };
         let mut dict = Layered::new(dicts);
-        let estimate = LaxUserFreqEstimate::max_from(dict.user_dict());
+        let estimate = LaxUserFreqEstimate::max_from(dict.user_dict_mut());
         let conversion_engine = Box::new(ChewingEngine::new());
         let editor = Editor::new(conversion_engine, dict, estimate, abbrev, sym_sel);
         editor
@@ -339,7 +339,7 @@ impl Editor {
         self.shared.com.symbols()
     }
     pub fn user_dict(&mut self) -> &mut dyn Dictionary {
-        self.shared.dict.user_dict()
+        self.shared.dict.user_dict_mut()
     }
     pub fn learn_phrase(
         &mut self,
@@ -653,7 +653,7 @@ impl SharedState {
             .collect::<String>();
         if self
             .dict
-            .user_dict()
+            .user_dict_mut()
             .lookup(&syllables, LookupStrategy::Standard)
             .into_iter()
             .any(|it| it.as_str() == phrase)

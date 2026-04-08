@@ -354,9 +354,13 @@ impl Dictionary for TrieBuf {
     }
 
     fn about(&self) -> DictionaryInfo {
-        self.trie
-            .as_ref()
-            .map_or(DictionaryInfo::default(), |trie| trie.about())
+        self.trie.as_ref().map_or(
+            DictionaryInfo {
+                usage: self.usage,
+                ..DictionaryInfo::default()
+            },
+            |trie| trie.about(),
+        )
     }
 
     fn path(&self) -> Option<&Path> {
