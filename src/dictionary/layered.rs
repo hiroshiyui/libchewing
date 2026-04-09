@@ -1,12 +1,12 @@
-use std::{
-    collections::{BTreeMap, btree_map::Entry},
-    iter,
-};
+use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 
 use log::error;
 
 use super::{Dictionary, DictionaryInfo, Entries, LookupStrategy, Phrase, UpdateDictionaryError};
-use crate::zhuyin::Syllable;
+use crate::{
+    dictionary::{DictionaryUsage, TrieBuf},
+    zhuyin::Syllable,
+};
 
 /// A collection of dictionaries that returns the union of the lookup results.
 /// # Examples
@@ -29,11 +29,11 @@ use crate::zhuyin::Syllable;
 ///     vec![("策", 100), ("冊", 100)]
 /// )]);
 ///
-/// let dict = Layered::new(vec![Box::new(sys_dict)], Box::new(user_dict));
+/// let dict = Layered::new(vec![Box::new(sys_dict), Box::new(user_dict)]);
 /// assert_eq!(
 ///     [
 ///         ("側", 1, 0).into(),
-///         ("冊", 101, 0).into(),
+///         ("冊", 100, 0).into(),
 ///         ("測", 1, 0).into(),
 ///         ("策", 100, 0).into(),
 ///     ]
@@ -48,20 +48,66 @@ use crate::zhuyin::Syllable;
 /// ```
 #[derive(Debug)]
 pub struct Layered {
-    sys_dict: Vec<Box<dyn Dictionary>>,
-    user_dict: Box<dyn Dictionary>,
+    dicts: Vec<Box<dyn Dictionary>>,
+    user_dict_index: usize,
 }
 
 impl Layered {
     /// Creates a new `Layered` with the list of dictionaries.
-    pub fn new(sys_dict: Vec<Box<dyn Dictionary>>, user_dict: Box<dyn Dictionary>) -> Layered {
+    pub fn new(mut dicts: Vec<Box<dyn Dictionary>>) -> Layered {
+        let user_dict_index = dicts.iter().enumerate().find_map(|d| {
+            if d.1.about().usage == DictionaryUsage::User {
+                Some(d.0)
+            } else {
+                None
+            }
+        });
+        if user_dict_index.is_none() {
+            let mut mem_dict = TrieBuf::new_in_memory();
+            mem_dict.set_usage(DictionaryUsage::User);
+            dicts.push(Box::new(mem_dict));
+        }
+        let user_dict_index = user_dict_index.unwrap_or(dicts.len() - 1);
         Layered {
-            sys_dict,
-            user_dict,
+            dicts,
+            user_dict_index,
         }
     }
-    pub fn user_dict(&mut self) -> &mut dyn Dictionary {
-        self.user_dict.as_mut()
+    pub fn user_dict(&self) -> &dyn Dictionary {
+        self.dicts[self.user_dict_index].as_ref()
+    }
+    pub fn user_dict_mut(&mut self) -> &mut dyn Dictionary {
+        self.dicts[self.user_dict_index].as_mut()
+    }
+    fn enabled_non_user_dicts(&self) -> impl Iterator<Item = &Box<dyn Dictionary>> {
+        self.dicts.iter().filter(|d| {
+            !matches!(
+                d.about().usage,
+                DictionaryUsage::User | DictionaryUsage::ExcludeList,
+            )
+        })
+    }
+    fn enabled_dicts(&self) -> impl Iterator<Item = &Box<dyn Dictionary>> {
+        self.dicts
+            .iter()
+            .filter(|d| d.about().usage != DictionaryUsage::ExcludeList)
+    }
+    fn exclusion_dicts(&self) -> impl Iterator<Item = &Box<dyn Dictionary>> {
+        self.dicts
+            .iter()
+            .filter(|d| d.about().usage == DictionaryUsage::ExcludeList)
+    }
+    fn exclusion_dicts_mut(&mut self) -> impl Iterator<Item = &mut Box<dyn Dictionary>> {
+        self.dicts
+            .iter_mut()
+            .filter(|d| d.about().usage == DictionaryUsage::ExcludeList)
+    }
+    pub(crate) fn is_excluded(&self, syllables: &[Syllable], phrase: &str) -> bool {
+        self.exclusion_dicts().any(|d| {
+            d.lookup(syllables, LookupStrategy::Standard)
+                .iter()
+                .any(|p| p.text.as_ref() == phrase)
+        })
     }
 }
 
@@ -72,7 +118,8 @@ impl Dictionary for Layered {
     /// dictionaries.
     ///
     /// When a phrase appears in multiple dictionaries, the final
-    /// frequency is the sum of all frequency in all dictionaries.
+    /// frequency is the max of all frequency in all dictionaries.
+    /// However, user dictionary should always take priority.
     ///
     /// Pseudo code
     ///
@@ -81,7 +128,7 @@ impl Dictionary for Layered {
     /// Foreach d in d_layers
     ///   Foreach phrase, freq in d.lookup_syllables()
     ///     If phrase in phrases
-    ///       Set phrases[phrase].freq += freq
+    ///       Set phrases[phrase].freq = max(phrases[phrase].freq, freq)
     ///     Else
     ///       Add phrases <- (phrase, freq)
     /// ```
@@ -89,44 +136,61 @@ impl Dictionary for Layered {
         let mut sort_map: BTreeMap<String, usize> = BTreeMap::new();
         let mut phrases: Vec<Phrase> = Vec::new();
 
-        self.sys_dict
-            .iter()
-            .chain(iter::once(&self.user_dict))
-            .for_each(|d| {
-                for phrase in d.lookup(syllables, strategy) {
-                    debug_assert!(!phrase.as_str().is_empty());
-                    match sort_map.entry(phrase.to_string()) {
-                        Entry::Occupied(entry) => {
-                            let index = *entry.get();
-                            phrases[index].freq += phrase.freq;
-                            phrases[index].last_used =
-                                match (phrases[index].last_used, phrase.last_used) {
-                                    (Some(orig), Some(new)) => Some(u64::max(orig, new)),
-                                    (Some(orig), None) => Some(orig),
-                                    (None, Some(new)) => Some(new),
-                                    (None, None) => None,
-                                };
-                        }
-                        Entry::Vacant(entry) => {
-                            entry.insert(phrases.len());
-                            phrases.push(phrase);
-                        }
+        self.enabled_non_user_dicts().for_each(|d| {
+            for phrase in d.lookup(syllables, strategy) {
+                debug_assert!(!phrase.as_str().is_empty());
+                match sort_map.entry(phrase.to_string()) {
+                    Entry::Occupied(entry) => {
+                        let index = *entry.get();
+                        phrases[index].freq = phrase.freq.max(phrases[index].freq);
+                        phrases[index].last_used =
+                            match (phrases[index].last_used, phrase.last_used) {
+                                (Some(orig), Some(new)) => Some(u64::max(orig, new)),
+                                (Some(orig), None) => Some(orig),
+                                (None, Some(new)) => Some(new),
+                                (None, None) => None,
+                            };
+                    }
+                    Entry::Vacant(entry) => {
+                        entry.insert(phrases.len());
+                        phrases.push(phrase);
                     }
                 }
-            });
+            }
+        });
+
+        // User dictionary should override other dictionaries.
+        for phrase in self.user_dict().lookup(syllables, strategy) {
+            match sort_map.entry(phrase.to_string()) {
+                Entry::Occupied(entry) => {
+                    let index = *entry.get();
+                    phrases[index].freq = phrase.freq;
+                    phrases[index].last_used = phrase.last_used;
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert(phrases.len());
+                    phrases.push(phrase);
+                }
+            }
+        }
+
+        // Remove excluded
+        let excluded: BTreeSet<Box<str>> = self
+            .exclusion_dicts()
+            .flat_map(|d| d.lookup(syllables, strategy))
+            .map(|p| p.text)
+            .collect();
         phrases
+            .into_iter()
+            .filter(|p| !excluded.contains(&p.text))
+            .collect()
     }
 
     /// Returns all entries from all dictionaries.
     ///
     /// **NOTE**: Duplicate entries are not removed.
     fn entries(&self) -> Entries<'_> {
-        Box::new(
-            self.sys_dict
-                .iter()
-                .chain(iter::once(&self.user_dict))
-                .flat_map(|dict| dict.entries()),
-        )
+        Box::new(self.enabled_dicts().flat_map(|dict| dict.entries()))
     }
 
     fn about(&self) -> DictionaryInfo {
@@ -140,12 +204,24 @@ impl Dictionary for Layered {
         None
     }
 
+    fn set_usage(&mut self, _usage: DictionaryUsage) {}
+
     fn reopen(&mut self) -> Result<(), UpdateDictionaryError> {
-        self.user_dict.reopen()
+        self.exclusion_dicts_mut().for_each(|d| {
+            if let Err(error) = d.reopen() {
+                error!("Failed to reopen exclusion dictionary: {error}");
+            }
+        });
+        self.user_dict_mut().reopen()
     }
 
     fn flush(&mut self) -> Result<(), UpdateDictionaryError> {
-        self.user_dict.flush()
+        self.exclusion_dicts_mut().for_each(|d| {
+            if let Err(error) = d.flush() {
+                error!("Failed to flush exclusion dictionary: {error}");
+            }
+        });
+        self.user_dict_mut().flush()
     }
 
     fn add_phrase(
@@ -157,7 +233,14 @@ impl Dictionary for Layered {
             error!("BUG! added phrase is empty");
             return Ok(());
         }
-        self.user_dict.add_phrase(syllables, phrase)
+        self.exclusion_dicts_mut().for_each(|d| {
+            if let Err(error) = d.remove_phrase(syllables, &phrase.text) {
+                error!(
+                    "Failed to remove {phrase} {syllables:?} from exclusion dictionary: {error}"
+                );
+            }
+        });
+        self.user_dict_mut().add_phrase(syllables, phrase)
     }
 
     fn update_phrase(
@@ -171,7 +254,7 @@ impl Dictionary for Layered {
             error!("BUG! added phrase is empty");
             return Ok(());
         }
-        self.user_dict
+        self.user_dict_mut()
             .update_phrase(syllables, phrase, user_freq, time)
     }
 
@@ -180,7 +263,12 @@ impl Dictionary for Layered {
         syllables: &[Syllable],
         phrase_str: &str,
     ) -> Result<(), UpdateDictionaryError> {
-        self.user_dict.remove_phrase(syllables, phrase_str)
+        self.exclusion_dicts_mut().for_each(|d| {
+            if let Err(error) = d.add_phrase(syllables, (phrase_str, 0).into()) {
+                error!("Failed to add {phrase_str} {syllables:?} to exclusion dictionary: {error}");
+            }
+        });
+        self.user_dict_mut().remove_phrase(syllables, phrase_str)
     }
 }
 
@@ -194,7 +282,8 @@ mod tests {
     use super::Layered;
     use crate::{
         dictionary::{
-            Dictionary, DictionaryBuilder, LookupStrategy, Phrase, Trie, TrieBuf, TrieBuilder,
+            Dictionary, DictionaryBuilder, DictionaryUsage, LookupStrategy, Phrase, Trie, TrieBuf,
+            TrieBuilder,
         },
         syl,
         zhuyin::Bopomofo,
@@ -211,7 +300,7 @@ mod tests {
             vec![("策", 100), ("冊", 100)],
         )]);
 
-        let dict = Layered::new(vec![Box::new(sys_dict)], Box::new(user_dict));
+        let dict = Layered::new(vec![Box::new(sys_dict), Box::new(user_dict)]);
         assert_eq!(
             [
                 (
@@ -253,7 +342,7 @@ mod tests {
             vec![("策", 100), ("冊", 100)],
         )]);
 
-        let dict = Layered::new(vec![Box::new(sys_dict)], Box::new(user_dict));
+        let dict = Layered::new(vec![Box::new(sys_dict), Box::new(user_dict)]);
         assert_eq!(
             Some(("側", 1, 0).into()),
             dict.lookup(
@@ -266,9 +355,48 @@ mod tests {
         assert_eq!(
             [
                 ("側", 1, 0).into(),
-                ("冊", 101, 0).into(),
+                ("冊", 100, 0).into(),
                 ("測", 1, 0).into(),
                 ("策", 100, 0).into(),
+            ]
+            .into_iter()
+            .collect::<Vec<Phrase>>(),
+            dict.lookup(
+                &vec![syl![Bopomofo::C, Bopomofo::E, Bopomofo::TONE4]],
+                LookupStrategy::Standard
+            ),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_user_dict_override() -> Result<(), Box<dyn Error>> {
+        let sys_dict = TrieBuf::from([(
+            vec![syl![Bopomofo::C, Bopomofo::E, Bopomofo::TONE4]],
+            vec![("測", 100), ("冊", 100), ("側", 100)],
+        )]);
+        let mut user_dict = TrieBuf::from([(
+            vec![syl![Bopomofo::C, Bopomofo::E, Bopomofo::TONE4]],
+            vec![("策", 1), ("冊", 1)],
+        )]);
+        user_dict.set_usage(DictionaryUsage::User);
+
+        let dict = Layered::new(vec![Box::new(sys_dict), Box::new(user_dict)]);
+        assert_eq!(
+            Some(("側", 100, 0).into()),
+            dict.lookup(
+                &vec![syl![Bopomofo::C, Bopomofo::E, Bopomofo::TONE4]],
+                LookupStrategy::Standard
+            )
+            .first()
+            .cloned(),
+        );
+        assert_eq!(
+            [
+                ("側", 100, 0).into(),
+                ("冊", 1, 0).into(),
+                ("測", 100, 0).into(),
+                ("策", 1, 0).into(),
             ]
             .into_iter()
             .collect::<Vec<Phrase>>(),
@@ -287,6 +415,7 @@ mod tests {
             vec![("測", 1), ("冊", 1), ("側", 1)],
         )]);
         let mut builder = TrieBuilder::new();
+        builder.set_usage(DictionaryUsage::User);
         builder.insert(
             &[syl![Bopomofo::C, Bopomofo::E, Bopomofo::TONE4]],
             ("策", 100, 0).into(),
@@ -298,9 +427,10 @@ mod tests {
         let mut cursor = Cursor::new(vec![]);
         builder.write(&mut cursor)?;
         cursor.rewind()?;
-        let user_dict = Trie::new(&mut cursor)?;
+        let mut user_dict = Trie::new(&mut cursor)?;
+        user_dict.set_usage(DictionaryUsage::User);
 
-        let mut dict = Layered::new(vec![Box::new(sys_dict)], Box::new(user_dict));
+        let mut dict = Layered::new(vec![Box::new(sys_dict), Box::new(user_dict)]);
         assert_eq!(
             Some(("側", 1, 0).into()),
             dict.lookup(
@@ -313,7 +443,7 @@ mod tests {
         assert_eq!(
             [
                 ("側", 1, 0).into(),
-                ("冊", 101, 0).into(),
+                ("冊", 100, 0).into(),
                 ("測", 1, 0).into(),
                 ("策", 100, 0).into(),
             ]

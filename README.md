@@ -35,12 +35,7 @@ libchewing releases can be verified with the following OpenPGP public key
 
 &emsp;[083B3CAB64267E5BAB7159673EF0C673DADCC30C][pgp_key] Libchewing Signing Key &lt;release@chewing.im&gt;
 
-or the following [minisign][] public key
-
-&emsp;RWRzJFnXiLZleAyCIv1talBjyRewelcy9gzYQq9pd3SKSFBPoy57sf5s
-
 [pgp_key]: https://chewing.im/.well-known/openpgpkey/hu/y84sdmnksfqswe7fxf5mzjg53tbdz8f5?l=release
-[minisign]: https://jedisct1.github.io/minisign/
 
 ## Status
 

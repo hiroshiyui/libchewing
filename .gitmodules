@@ -1,5 +1,4 @@
 [submodule "data"]
 	path = data
-	url = git@github.com:hiroshiyui/libchewing-data.git
-	branch = guileless_bopomofo
+	url = https://github.com/chewing/libchewing-data
 	shallow = true

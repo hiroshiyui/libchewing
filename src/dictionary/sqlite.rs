@@ -5,13 +5,14 @@ use std::{
     str,
 };
 
+use log::debug;
 use rusqlite::{Connection, Error as RusqliteError, OpenFlags, OptionalExtension, params};
 
 use super::{
     BuildDictionaryError, Dictionary, DictionaryBuilder, DictionaryInfo, Entries, LookupStrategy,
     Phrase, UpdateDictionaryError,
 };
-use crate::zhuyin::Syllable;
+use crate::{dictionary::DictionaryUsage, exn::ResultExt, zhuyin::Syllable};
 
 const APPLICATION_ID: u32 = 0x43484557; // 'CHEW' in big-endian
 const USER_VERSION: u32 = 0;
@@ -50,11 +51,26 @@ pub enum SqliteDictionaryError {
 
 impl Display for SqliteDictionaryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "sqlite error")
+        match self {
+            SqliteDictionaryError::SqliteError { source: _ } => {
+                write!(f, "failed to perform sqlite operation")
+            }
+            SqliteDictionaryError::MissingTable { table } => {
+                write!(f, "sqlite {table} does not exist")
+            }
+            SqliteDictionaryError::ReadOnly => write!(f, "sqlite file is readonly"),
+        }
     }
 }
 
-impl Error for SqliteDictionaryError {}
+impl Error for SqliteDictionaryError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            SqliteDictionaryError::SqliteError { source } => Some(source),
+            _ => None,
+        }
+    }
+}
 
 impl From<RusqliteError> for SqliteDictionaryError {
     fn from(value: RusqliteError) -> Self {
@@ -75,11 +91,16 @@ impl SqliteDictionary {
     /// TODO: doc
     pub fn open<P: AsRef<Path>>(path: P) -> Result<SqliteDictionary, SqliteDictionaryError> {
         let path = path.as_ref().to_path_buf();
+        debug!("open sqlite dictionary at {path:?}");
         let mut conn = Connection::open(&path)?;
+        debug!("initialize dictionary tables");
         Self::initialize_tables(&conn)?;
+        debug!("migrate from userphrase_v1");
         Self::migrate_from_userphrase_v1(&mut conn)?;
+        debug!("ensure tables exist");
         Self::ensure_tables(&conn)?;
         let info = Self::read_info_v1(&conn)?;
+        debug!("read dictionary info {info:?}");
 
         Ok(SqliteDictionary {
             conn,
@@ -179,16 +200,19 @@ impl SqliteDictionary {
     }
 
     fn migrate_from_userphrase_v1(conn: &mut Connection) -> Result<(), SqliteDictionaryError> {
+        debug!("query has_userphrase_v1");
         let has_userphrase_v1: bool = conn.query_row(
             "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type='table' AND name='userphrase_v1')",
             [],
             |row| row.get(0)
         )?;
+        debug!("query migrated");
         let migrated: bool = conn.query_row(
             "SELECT EXISTS (SELECT 1 FROM migration_v1 WHERE name='migrate_from_userphrase_v1')",
             [],
             |row| row.get(0),
         )?;
+        debug!("has_userphrase_v1={has_userphrase_v1} migrated={migrated}");
         if !has_userphrase_v1 || migrated {
             // Don't need to migrate
             conn.execute(
@@ -233,13 +257,13 @@ impl SqliteDictionary {
                 userphrases.push((
                     syllables,
                     row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
+                    row.get(1).unwrap_or(0),
+                    row.get(2).unwrap_or(0),
+                    row.get(3).unwrap_or(0),
                 ));
             }
         }
-
+        debug!("{} phrases loaded", userphrases.len());
         let tx = conn.transaction()?;
         {
             for item in userphrases {
@@ -299,14 +323,6 @@ impl SqliteDictionary {
             }
         }
         Ok(info)
-    }
-}
-
-impl From<RusqliteError> for UpdateDictionaryError {
-    fn from(source: RusqliteError) -> Self {
-        UpdateDictionaryError {
-            source: Some(source.into()),
-        }
     }
 }
 
@@ -382,17 +398,26 @@ impl Dictionary for SqliteDictionary {
         self.path.as_ref().map(|p| p as &Path)
     }
 
+    fn set_usage(&mut self, _usage: DictionaryUsage) {}
+
     fn reopen(&mut self) -> Result<(), UpdateDictionaryError> {
         Ok(())
     }
 
     fn flush(&mut self) -> Result<(), UpdateDictionaryError> {
+        let make_error = |e| UpdateDictionaryError {
+            message: "flush sqlite failed",
+            source: Some(Box::new(e)),
+        };
         if self.readonly {
             return Err(UpdateDictionaryError {
-                source: Some(Box::new(SqliteDictionaryError::ReadOnly)),
+                message: "sqlite dictionary is readonly",
+                source: None,
             });
         }
-        self.conn.pragma_update(None, "wal_checkpoint", "PASSIVE")?;
+        self.conn
+            .pragma_update(None, "wal_checkpoint", "PASSIVE")
+            .map_err(make_error)?;
         Ok(())
     }
 
@@ -401,20 +426,29 @@ impl Dictionary for SqliteDictionary {
         syllables: &[Syllable],
         phrase: Phrase,
     ) -> Result<(), UpdateDictionaryError> {
+        let make_error = |e| UpdateDictionaryError {
+            message: "add phrae to sqlite failed",
+            source: Some(Box::new(e)),
+        };
         if self.readonly {
             return Err(UpdateDictionaryError {
-                source: Some(Box::new(SqliteDictionaryError::ReadOnly)),
+                message: "sqlite dictionary is readonly",
+                source: None,
             });
         }
         let syllables_bytes = syllables.to_bytes();
-        let mut stmt = self.conn.prepare_cached(
-            "INSERT OR REPLACE INTO dictionary_v1 (
+        let mut stmt = self
+            .conn
+            .prepare_cached(
+                "INSERT OR REPLACE INTO dictionary_v1 (
                     syllables,
                     phrase,
                     freq
             ) VALUES (?, ?, ?)",
-        )?;
-        stmt.execute(params![syllables_bytes, phrase.as_str(), phrase.freq()])?;
+            )
+            .map_err(make_error)?;
+        stmt.execute(params![syllables_bytes, phrase.as_str(), phrase.freq()])
+            .map_err(make_error)?;
         Ok(())
     }
 
@@ -425,52 +459,64 @@ impl Dictionary for SqliteDictionary {
         user_freq: u32,
         time: u64,
     ) -> Result<(), UpdateDictionaryError> {
+        let make_error = |e| UpdateDictionaryError {
+            message: "update phrae in sqlite failed",
+            source: Some(Box::new(e)),
+        };
         // sqlite only supports i64
         let time: i64 = time.clamp(0, i64::MAX as u64) as i64;
         if self.readonly {
             return Err(UpdateDictionaryError {
-                source: Some(Box::new(SqliteDictionaryError::ReadOnly)),
+                message: "sqlite dictionary is readonly",
+                source: None,
             });
         }
         let syllables_bytes = syllables.to_bytes();
-        let tx = self.conn.transaction()?;
+        let tx = self.conn.transaction().map_err(make_error)?;
         {
-            let mut stmt = tx.prepare_cached(
-                "SELECT userphrase_id FROM dictionary_v1 WHERE syllables = ? AND phrase = ?",
-            )?;
+            let mut stmt = tx
+                .prepare_cached(
+                    "SELECT userphrase_id FROM dictionary_v1 WHERE syllables = ? AND phrase = ?",
+                )
+                .map_err(make_error)?;
             let userphrase_id: Option<Option<i64>> = stmt
                 .query_row(params![syllables_bytes, phrase.as_str()], |row| row.get(0))
-                .optional()?;
+                .optional()
+                .map_err(make_error)?;
             match userphrase_id {
                 Some(Some(id)) => {
-                    let mut stmt =
-                        tx.prepare_cached("UPDATE userphrase_v2 SET user_freq = ? WHERE id = ?")?;
-                    stmt.execute(params![user_freq, id])?;
+                    let mut stmt = tx
+                        .prepare_cached("UPDATE userphrase_v2 SET user_freq = ? WHERE id = ?")
+                        .map_err(make_error)?;
+                    stmt.execute(params![user_freq, id]).map_err(make_error)?;
                 }
                 Some(None) | None => {
-                    let mut stmt = tx.prepare_cached(
-                        "INSERT INTO userphrase_v2 (user_freq, time) VALUES (?, ?)",
-                    )?;
-                    stmt.execute(params![user_freq, time])?;
+                    let mut stmt = tx
+                        .prepare_cached("INSERT INTO userphrase_v2 (user_freq, time) VALUES (?, ?)")
+                        .map_err(make_error)?;
+                    stmt.execute(params![user_freq, time]).map_err(make_error)?;
                     let userphrase_id = tx.last_insert_rowid();
-                    let mut stmt = tx.prepare_cached(
-                        "INSERT OR REPLACE INTO dictionary_v1 (
+                    let mut stmt = tx
+                        .prepare_cached(
+                            "INSERT OR REPLACE INTO dictionary_v1 (
                             syllables,
                             phrase,
                             freq,
                             userphrase_id
                         ) VALUES (?, ?, ?, ?)",
-                    )?;
+                        )
+                        .map_err(make_error)?;
                     stmt.execute(params![
                         syllables_bytes,
                         phrase.as_str(),
                         phrase.freq(),
                         userphrase_id
-                    ])?;
+                    ])
+                    .map_err(make_error)?;
                 }
             }
         }
-        tx.commit()?;
+        tx.commit().map_err(make_error)?;
         Ok(())
     }
 
@@ -479,11 +525,17 @@ impl Dictionary for SqliteDictionary {
         syllables: &[Syllable],
         phrase_str: &str,
     ) -> Result<(), UpdateDictionaryError> {
+        let make_error = |e| UpdateDictionaryError {
+            message: "remove phrae from sqlite failed",
+            source: Some(Box::new(e)),
+        };
         let syllables_bytes = syllables.to_bytes();
         let mut stmt = self
             .conn
-            .prepare_cached("DELETE FROM dictionary_v1 WHERE syllables = ? AND phrase = ?")?;
-        stmt.execute(params![syllables_bytes, phrase_str])?;
+            .prepare_cached("DELETE FROM dictionary_v1 WHERE syllables = ? AND phrase = ?")
+            .map_err(make_error)?;
+        stmt.execute(params![syllables_bytes, phrase_str])
+            .map_err(make_error)?;
         Ok(())
     }
 }
@@ -509,35 +561,21 @@ impl Default for SqliteDictionaryBuilder {
     }
 }
 
-impl From<RusqliteError> for BuildDictionaryError {
-    fn from(source: RusqliteError) -> Self {
-        BuildDictionaryError {
-            source: Box::new(source),
-        }
-    }
-}
-
-impl From<str::Utf8Error> for BuildDictionaryError {
-    fn from(source: str::Utf8Error) -> Self {
-        BuildDictionaryError {
-            source: Box::new(source),
-        }
-    }
-}
-
 impl DictionaryBuilder for SqliteDictionaryBuilder {
     fn set_info(&mut self, info: DictionaryInfo) -> Result<(), BuildDictionaryError> {
-        let tx = self.dict.conn.transaction()?;
+        let err = || BuildDictionaryError::new("failed to set dictionary info");
+        let tx = self.dict.conn.transaction().or_raise(err)?;
         {
-            let mut stmt =
-                tx.prepare("INSERT OR REPLACE INTO info_v1 (key, value) VALUES (?, ?)")?;
-            stmt.execute(["name", &info.name])?;
-            stmt.execute(["copyright", &info.copyright])?;
-            stmt.execute(["license", &info.license])?;
-            stmt.execute(["version", &info.version])?;
-            stmt.execute(["software", &info.software])?;
+            let mut stmt = tx
+                .prepare("INSERT OR REPLACE INTO info_v1 (key, value) VALUES (?, ?)")
+                .or_raise(err)?;
+            stmt.execute(["name", &info.name]).or_raise(err)?;
+            stmt.execute(["copyright", &info.copyright]).or_raise(err)?;
+            stmt.execute(["license", &info.license]).or_raise(err)?;
+            stmt.execute(["version", &info.version]).or_raise(err)?;
+            stmt.execute(["software", &info.software]).or_raise(err)?;
         }
-        tx.commit()?;
+        tx.commit().or_raise(err)?;
         Ok(())
     }
 
@@ -546,6 +584,7 @@ impl DictionaryBuilder for SqliteDictionaryBuilder {
         syllables: &[Syllable],
         phrase: Phrase,
     ) -> Result<(), BuildDictionaryError> {
+        let err = || BuildDictionaryError::new("failed to insert phrase");
         let sort_id = if syllables.len() == 1 {
             self.sort_id += 1;
             self.sort_id
@@ -553,29 +592,37 @@ impl DictionaryBuilder for SqliteDictionaryBuilder {
             0
         };
         let syllables_bytes = syllables.to_bytes();
-        let mut stmt = self.dict.conn.prepare_cached(
-            "INSERT OR REPLACE INTO dictionary_v1 (
+        let mut stmt = self
+            .dict
+            .conn
+            .prepare_cached(
+                "INSERT OR REPLACE INTO dictionary_v1 (
                     syllables,
                     phrase,
                     freq,
                     sort_id
             ) VALUES (?, ?, ?, ?)",
-        )?;
+            )
+            .or_raise(err)?;
         stmt.execute(params![
             syllables_bytes,
             phrase.as_str(),
             phrase.freq(),
             sort_id
-        ])?;
+        ])
+        .or_raise(err)?;
 
         Ok(())
     }
 
     fn build(&mut self, path: &Path) -> Result<(), BuildDictionaryError> {
-        let path = path.to_str().ok_or(BuildDictionaryError {
-            source: "cannot convert file path to utf8".into(),
-        })?;
-        self.dict.conn.execute("VACUUM INTO ?", [path])?;
+        let path = path
+            .to_str()
+            .or_raise(|| BuildDictionaryError::new("cannot convert file path to utf8"))?;
+        self.dict
+            .conn
+            .execute("VACUUM INTO ?", [path])
+            .or_raise(|| BuildDictionaryError::new("failed to finalize dictionary"))?;
         Ok(())
     }
 }

@@ -6,19 +6,20 @@ use std::{
     cmp::Ordering,
     error::Error,
     fmt::{Debug, Display},
-    io,
     path::Path,
 };
 
 pub use self::layered::Layered;
 pub use self::loader::{
-    DEFAULT_DICT_NAMES, LoadDictionaryError, SingleDictionaryLoader, SystemDictionaryLoader,
-    UserDictionaryLoader,
+    AssetLoader, DEFAULT_DICT_NAMES, LoadDictionaryError, SingleDictionaryLoader,
+    UserDictionaryManager,
 };
 #[cfg(feature = "sqlite")]
 pub use self::sqlite::{SqliteDictionary, SqliteDictionaryBuilder, SqliteDictionaryError};
 pub use self::trie::{Trie, TrieBuilder, TrieOpenOptions, TrieStatistics};
 pub use self::trie_buf::TrieBuf;
+pub use self::usage::DictionaryUsage;
+use crate::exn::Exn;
 use crate::zhuyin::Syllable;
 
 mod layered;
@@ -28,39 +29,7 @@ mod sqlite;
 mod trie;
 mod trie_buf;
 mod uhash;
-
-/// The error type which is returned from updating a dictionary.
-#[derive(Debug)]
-pub struct UpdateDictionaryError {
-    /// TODO: doc
-    source: Option<Box<dyn Error + Send + Sync>>,
-}
-
-impl UpdateDictionaryError {
-    pub(crate) fn new() -> UpdateDictionaryError {
-        UpdateDictionaryError { source: None }
-    }
-}
-
-impl From<io::Error> for UpdateDictionaryError {
-    fn from(value: io::Error) -> Self {
-        UpdateDictionaryError {
-            source: Some(Box::new(value)),
-        }
-    }
-}
-
-impl Display for UpdateDictionaryError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "update dictionary failed")
-    }
-}
-
-impl Error for UpdateDictionaryError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        self.source.as_ref().map(|err| err.as_ref() as &dyn Error)
-    }
-}
+mod usage;
 
 /// A collection of metadata of a dictionary.
 ///
@@ -100,6 +69,8 @@ pub struct DictionaryInfo {
     ///
     /// It's recommended to include the name and the version number.
     pub software: String,
+    /// The intended usage of the dictionary.
+    pub usage: DictionaryUsage,
 }
 
 /// A type containing a phrase string and its frequency.
@@ -347,19 +318,21 @@ pub trait Dictionary: Debug {
     fn about(&self) -> DictionaryInfo;
     /// Returns the dictionary file path if it's backed by a file.
     fn path(&self) -> Option<&Path>;
+    /// Set the runtime usage of the dictionary
+    fn set_usage(&mut self, usage: DictionaryUsage);
     /// Reopens the dictionary if it was changed by a different process
     ///
     /// It should not fail if the dictionary is read-only or able to sync across
     /// processes automatically.
     fn reopen(&mut self) -> Result<(), UpdateDictionaryError> {
-        Err(UpdateDictionaryError { source: None })
+        Err(UpdateDictionaryError::new("unimplemented"))
     }
     /// Flushes all the changes back to the filesystem
     ///
     /// The change made to the dictionary might not be persisted without
     /// calling this method.
     fn flush(&mut self) -> Result<(), UpdateDictionaryError> {
-        Err(UpdateDictionaryError { source: None })
+        Err(UpdateDictionaryError::new("unimplemented"))
     }
     /// An method for updating dictionaries.
     ///
@@ -384,7 +357,7 @@ pub trait Dictionary: Debug {
         _syllables: &[Syllable],
         _phrase: Phrase,
     ) -> Result<(), UpdateDictionaryError> {
-        Err(UpdateDictionaryError { source: None })
+        Err(UpdateDictionaryError::new("unimplemented"))
     }
     /// TODO: doc
     fn update_phrase(
@@ -394,7 +367,7 @@ pub trait Dictionary: Debug {
         _user_freq: u32,
         _time: u64,
     ) -> Result<(), UpdateDictionaryError> {
-        Err(UpdateDictionaryError { source: None })
+        Err(UpdateDictionaryError::new("unimplemented"))
     }
     /// TODO: doc
     fn remove_phrase(
@@ -402,33 +375,7 @@ pub trait Dictionary: Debug {
         _syllables: &[Syllable],
         _phrase_str: &str,
     ) -> Result<(), UpdateDictionaryError> {
-        Err(UpdateDictionaryError { source: None })
-    }
-}
-
-/// Errors during dictionary construction.
-#[derive(Debug)]
-pub struct BuildDictionaryError {
-    source: Box<dyn Error + Send + Sync>,
-}
-
-impl Display for BuildDictionaryError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "build dictionary error")
-    }
-}
-
-impl Error for BuildDictionaryError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        Some(self.source.as_ref())
-    }
-}
-
-impl From<io::Error> for BuildDictionaryError {
-    fn from(source: io::Error) -> Self {
-        BuildDictionaryError {
-            source: Box::new(source),
-        }
+        Err(UpdateDictionaryError::new("unimplemented"))
     }
 }
 
@@ -445,6 +392,55 @@ pub trait DictionaryBuilder: Any {
     /// TODO: doc
     fn build(&mut self, path: &Path) -> Result<(), BuildDictionaryError>;
 }
+
+/// The error type which is returned from updating a dictionary.
+#[derive(Debug)]
+pub struct UpdateDictionaryError {
+    /// TODO: doc
+    message: &'static str,
+    source: Option<Box<dyn Error + Send + Sync>>,
+}
+
+impl UpdateDictionaryError {
+    pub(crate) fn new(message: &'static str) -> UpdateDictionaryError {
+        UpdateDictionaryError {
+            message,
+            source: None,
+        }
+    }
+}
+
+impl Display for UpdateDictionaryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "update dictionary failed: {}", self.message)
+    }
+}
+
+impl_exn!(UpdateDictionaryError);
+
+/// Errors during dictionary construction.
+#[derive(Debug)]
+pub struct BuildDictionaryError {
+    msg: String,
+    source: Option<Box<dyn Error + Send + Sync + 'static>>,
+}
+
+impl BuildDictionaryError {
+    fn new(msg: &str) -> BuildDictionaryError {
+        BuildDictionaryError {
+            msg: msg.to_string(),
+            source: None,
+        }
+    }
+}
+
+impl Display for BuildDictionaryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "build dictionary error: {}", self.msg)
+    }
+}
+
+impl_exn!(BuildDictionaryError);
 
 #[cfg(test)]
 mod tests {
