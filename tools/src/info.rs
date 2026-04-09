@@ -1,16 +1,17 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chewing::{
-    dictionary::{Dictionary, SingleDictionaryLoader, UserDictionaryLoader},
-    path::{find_files_by_ext, sys_path_from_env_var},
+    dictionary::{Dictionary, SingleDictionaryLoader, UserDictionaryManager},
+    path::{find_files_by_ext, search_path_from_env_var},
 };
 
 use crate::flags;
 
 pub(crate) fn run(args: flags::Info) -> Result<()> {
+    let error = || "failed to inspect file";
     if args.system {
         // FIXME: use find_files_by_ext and generic loader
         let loader = SingleDictionaryLoader::new();
-        let search_path = sys_path_from_env_var();
+        let search_path = search_path_from_env_var();
         let files = find_files_by_ext(&search_path, &["dat", "sqlite3"]);
         let dictionaries: Vec<_> = files
             .iter()
@@ -24,7 +25,7 @@ pub(crate) fn run(args: flags::Info) -> Result<()> {
         }
     }
     if args.user {
-        let dict = UserDictionaryLoader::new().load()?;
+        let dict = UserDictionaryManager::new().init().with_context(error)?;
         if args.json {
             print_json_info(&[dict], "user");
         } else {
@@ -32,7 +33,9 @@ pub(crate) fn run(args: flags::Info) -> Result<()> {
         }
     }
     if let Some(path) = args.path {
-        let dict = UserDictionaryLoader::new().userphrase_path(path).load()?;
+        let dict = SingleDictionaryLoader::new()
+            .guess_format_and_load(&path)
+            .with_context(error)?;
         if args.json {
             print_json_info(&[dict], "input");
         } else {
@@ -76,6 +79,7 @@ fn print_json_info(dictionaries: &[Box<dyn Dictionary>], from: &str) {
         println!(r#"    "copyright": "{}","#, escape_json(info.copyright));
         println!(r#"    "license": "{}","#, escape_json(info.license));
         println!(r#"    "software": "{}""#, escape_json(info.software));
+        println!(r#"    "usage": "{}""#, escape_json(info.usage.to_string()));
         println!("  }}{}", if iter.peek().is_some() { "," } else { "" });
     }
     println!("]");
@@ -96,5 +100,6 @@ fn print_info(dictionaries: &[Box<dyn Dictionary>], from: &str) {
         println!("Copyright : {}", info.copyright);
         println!("License   : {}", info.license);
         println!("Software  : {}", info.software);
+        println!("Usage     : {}", info.usage);
     }
 }

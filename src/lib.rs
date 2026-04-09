@@ -1,4 +1,4 @@
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![deny(elided_lifetimes_in_paths)]
 #![deny(macro_use_extern_crate)]
 #![deny(missing_abi)]
@@ -74,6 +74,9 @@
 //!
 //! Other required files `swkb.dat` and `symbols.dat` can be copied directly to
 //! the dictionary folder.
+
+#[macro_use]
+mod exn;
 
 pub mod conversion;
 pub mod dictionary;

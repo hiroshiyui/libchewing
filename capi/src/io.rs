@@ -134,7 +134,7 @@ pub unsafe extern "C" fn chewing_new2(
         chewing_new3(
             syspath,
             userpath,
-            c"word.dat,tsi.dat".as_ptr(),
+            c"word.dat,tsi.dat,chewing.dat,chewing-deleted.dat".as_ptr(),
             logger,
             loggerdata,
         )
@@ -237,7 +237,7 @@ pub unsafe extern "C" fn chewing_new3(
 /// don't need to be freed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chewing_get_defaultDictionaryNames() -> *const c_char {
-    c"word.dat,tsi.dat".as_ptr()
+    c"word.dat,tsi.dat,chewing.dat,chewing-deleted.dat".as_ptr()
 }
 
 /// Releases the resources used by the given Chewing IM instance.
@@ -378,6 +378,7 @@ pub unsafe extern "C" fn chewing_config_has_option(
             | "chewing.conversion_engine"
             | "chewing.enable_fullwidth_toggle_key"
             | "chewing.sort_candidates_by_frequency"
+            | "chewing.auto_snapshot_selections"
     );
 
     ret as c_int
@@ -431,6 +432,7 @@ pub unsafe extern "C" fn chewing_config_get_int(
         },
         "chewing.enable_fullwidth_toggle_key" => option.enable_fullwidth_toggle_key as c_int,
         "chewing.sort_candidates_by_frequency" => option.sort_candidates_by_frequency as c_int,
+        "chewing.auto_snapshot_selections" => option.auto_snapshot_selections as c_int,
         _ => ERROR,
     }
 }
@@ -555,6 +557,10 @@ pub unsafe extern "C" fn chewing_config_set_int(
         "chewing.sort_candidates_by_frequency" => {
             ensure_bool!(value);
             options.sort_candidates_by_frequency = value > 0;
+        }
+        "chewing.auto_snapshot_selections" => {
+            ensure_bool!(value);
+            options.auto_snapshot_selections = value > 0;
         }
         _ => return ERROR,
     };

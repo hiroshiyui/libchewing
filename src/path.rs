@@ -4,7 +4,7 @@ use std::{
     env,
     ffi::OsStr,
     fs,
-    io::ErrorKind,
+    io::{self, ErrorKind},
     path::{Path, PathBuf},
 };
 
@@ -34,32 +34,32 @@ fn file_exists(path: &Path) -> bool {
     }
 }
 
-pub fn sys_path_from_env_var() -> String {
+pub fn search_path_from_env_var() -> String {
+    let mut paths = vec![];
+    if let Some(user_datadir) = data_dir() {
+        paths.push(
+            user_datadir
+                .join(DICT_FOLDER)
+                .to_string_lossy()
+                .into_owned(),
+        );
+        paths.push(user_datadir.to_string_lossy().into_owned());
+    }
     let chewing_path = env::var("CHEWING_PATH");
     if let Ok(chewing_path) = chewing_path {
-        info!("Using syspath from env CHEWING_PATH: {}", chewing_path);
-        chewing_path
+        info!("Add path from CHEWING_PATH: {}", chewing_path);
+        paths.push(chewing_path);
     } else {
-        let mut paths = vec![];
-        if let Some(user_datadir) = data_dir() {
-            paths.push(
-                user_datadir
-                    .join(DICT_FOLDER)
-                    .to_string_lossy()
-                    .into_owned(),
-            );
-            paths.push(user_datadir.to_string_lossy().into_owned());
-        }
         let sys_datadir = PathBuf::from(SYS_PATH.unwrap_or(DEFAULT_SYS_PATH));
         paths.push(sys_datadir.join(DICT_FOLDER).to_string_lossy().into_owned());
         paths.push(sys_datadir.to_string_lossy().into_owned());
-        let chewing_path = paths.join(&SEARCH_PATH_SEP.to_string());
-        info!("Using default syspath: {}", chewing_path);
-        chewing_path
     }
+    let chewing_path = paths.join(&SEARCH_PATH_SEP.to_string());
+    info!("Using search path: {}", chewing_path);
+    chewing_path
 }
 
-pub(crate) fn find_path_by_files(search_path: &str, files: &[&str]) -> Option<PathBuf> {
+pub(crate) fn find_path_by_files(search_path: &str, files: &[&str]) -> Result<PathBuf, io::Error> {
     for path in search_path.split(SEARCH_PATH_SEP) {
         let prefix = Path::new(path).to_path_buf();
         info!("Search files {:?} in {}", files, prefix.display());
@@ -73,10 +73,10 @@ pub(crate) fn find_path_by_files(search_path: &str, files: &[&str]) -> Option<Pa
             .all(|it| file_exists(&it))
         {
             info!("Found {:?} in {}", files, prefix.display());
-            return Some(prefix);
+            return Ok(prefix);
         }
     }
-    None
+    Err(ErrorKind::NotFound.into())
 }
 
 pub fn find_files_by_ext(search_path: &str, exts: &[&str]) -> Vec<PathBuf> {

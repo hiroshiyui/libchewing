@@ -1,5 +1,4 @@
 use std::{
-    cell::Cell,
     cmp::Ordering,
     collections::VecDeque,
     error::Error,
@@ -9,7 +8,6 @@ use std::{
     iter,
     num::NonZeroUsize,
     path::{Path, PathBuf},
-    time::SystemTime,
 };
 
 use der::{
@@ -17,13 +15,13 @@ use der::{
     SliceReader, Tag, TagMode, TagNumber, Tagged, Writer,
     asn1::{ContextSpecificRef, OctetStringRef, Utf8StringRef},
 };
-use log::{error, warn};
+use log::{debug, error};
 
 use super::{
     BuildDictionaryError, Dictionary, DictionaryBuilder, DictionaryInfo, Entries, LookupStrategy,
     Phrase,
 };
-use crate::zhuyin::Syllable;
+use crate::{dictionary::DictionaryUsage, exn::ResultExt, zhuyin::Syllable};
 
 const DICT_FORMAT_VERSION: u8 = 0;
 
@@ -266,7 +264,6 @@ impl Dictionary for Trie {
 
         // Return early for empty dictionary
         if root.child_begin() == root.child_end() {
-            warn!("[!] detected empty dictionary.");
             return vec![];
         }
 
@@ -419,26 +416,32 @@ impl Dictionary for Trie {
     fn path(&self) -> Option<&Path> {
         self.path.as_ref().map(|p| p as &Path)
     }
+
+    fn set_usage(&mut self, usage: DictionaryUsage) {
+        self.info.usage = usage;
+    }
 }
 
 fn context_specific<T: EncodeValue + Tagged>(
     tag_number: u8,
+    tag_mode: TagMode,
     value: &T,
 ) -> ContextSpecificRef<'_, T> {
     ContextSpecificRef {
         tag_number: TagNumber::new(tag_number),
-        tag_mode: TagMode::Implicit,
+        tag_mode,
         value,
     }
 }
 
 fn context_specific_opt<T: EncodeValue + Tagged>(
     tag_number: u8,
+    tag_mode: TagMode,
     value: &Option<T>,
 ) -> Option<ContextSpecificRef<'_, T>> {
     value
         .as_ref()
-        .map(|value| context_specific(tag_number, value))
+        .map(|value| context_specific(tag_number, tag_mode, value))
 }
 
 struct DictionaryInfoRef<'a> {
@@ -447,6 +450,7 @@ struct DictionaryInfoRef<'a> {
     license: Utf8StringRef<'a>,
     version: Utf8StringRef<'a>,
     software: Utf8StringRef<'a>,
+    usage: DictionaryUsage,
 }
 
 impl From<DictionaryInfoRef<'_>> for DictionaryInfo {
@@ -457,6 +461,7 @@ impl From<DictionaryInfoRef<'_>> for DictionaryInfo {
             license: value.license.into(),
             version: value.version.into(),
             software: value.software.into(),
+            usage: value.usage.into(),
         }
     }
 }
@@ -469,6 +474,7 @@ impl DictionaryInfoRef<'_> {
             license: Utf8StringRef::new(&info.license).unwrap(),
             version: Utf8StringRef::new(&info.version).unwrap(),
             software: Utf8StringRef::new(&info.software).unwrap(),
+            usage: info.usage,
         }
     }
 }
@@ -485,12 +491,19 @@ impl<'a> DecodeValue<'a> for DictionaryInfoRef<'a> {
             let license = reader.decode()?;
             let version = reader.decode()?;
             let software = reader.decode()?;
+            let raw_usage = reader
+                .context_specific(TagNumber::N0, TagMode::Explicit)?
+                .unwrap_or(0);
+            let usage = DictionaryUsage::from(raw_usage);
+            // consume the remaining unknown data
+            let _ = reader.read_slice(reader.remaining_len());
             Ok(DictionaryInfoRef {
                 name,
                 copyright,
                 license,
                 version,
                 software,
+                usage,
             })
         })
     }
@@ -503,6 +516,9 @@ impl EncodeValue for DictionaryInfoRef<'_> {
             + self.license.encoded_len()?
             + self.version.encoded_len()?
             + self.software.encoded_len()?
+        // TODO - enable this will break chewing <= 0.11.0 because old
+        // parser did not handle extension marker properly
+        // + context_specific(0, TagMode::Explicit, &(self.usage as u8)).encoded_len()?
     }
 
     fn encode_value(&self, encoder: &mut impl Writer) -> der::Result<()> {
@@ -511,6 +527,9 @@ impl EncodeValue for DictionaryInfoRef<'_> {
         self.license.encode(encoder)?;
         self.version.encode(encoder)?;
         self.software.encode(encoder)?;
+        // TODO - enable this will break chewing <= 0.11.0 because old
+        // parser did not handle extension marker properly
+        // context_specific(0, TagMode::Explicit, &(self.usage as u8)).encode(encoder)?;
         Ok(())
     }
 }
@@ -538,6 +557,8 @@ impl<'a> DecodeValue<'a> for TrieFileRef<'a> {
             let info = reader.decode()?;
             let index = reader.decode()?;
             let phrase_seq = reader.decode()?;
+            // consume the remaining unknown data
+            let _ = reader.read_slice(reader.remaining_len());
             Ok(Self {
                 info,
                 index,
@@ -576,6 +597,8 @@ impl<'a> DecodeValue<'a> for Phrase {
             let phrase: Utf8StringRef<'_> = reader.decode()?;
             let freq = reader.decode()?;
             let last_used = reader.context_specific(TagNumber::N0, TagMode::Implicit)?;
+            // consume the remaining unknown data
+            let _ = reader.read_slice(reader.remaining_len());
             Ok(Phrase {
                 text: String::from(phrase).into_boxed_str(),
                 freq,
@@ -589,13 +612,13 @@ impl EncodeValue for Phrase {
     fn value_len(&self) -> der::Result<Length> {
         Utf8StringRef::new(self.as_str())?.encoded_len()?
             + self.freq.encoded_len()?
-            + context_specific_opt(0, &self.last_used).encoded_len()?
+            + context_specific_opt(0, TagMode::Implicit, &self.last_used).encoded_len()?
     }
 
     fn encode_value(&self, encoder: &mut impl Writer) -> der::Result<()> {
         Utf8StringRef::new(self.as_ref())?.encode(encoder)?;
         self.freq.encode(encoder)?;
-        context_specific_opt(0, &self.last_used).encode(encoder)?;
+        context_specific_opt(0, TagMode::Implicit, &self.last_used).encode(encoder)?;
         Ok(())
     }
 }
@@ -890,6 +913,11 @@ impl TrieBuilder {
         node_id
     }
 
+    /// Set the intended usage of this trie dictionary.
+    pub fn set_usage(&mut self, usage: DictionaryUsage) {
+        self.info.usage = usage;
+    }
+
     /// Writes the dictionary to an output stream and returns the number of
     /// bytes written.
     ///
@@ -986,8 +1014,9 @@ impl TrieBuilder {
             }
         }
 
+        let info = DictionaryInfoRef::new(&self.info);
         let trie_dict_ref = TrieFileRef {
-            info: DictionaryInfoRef::new(&self.info),
+            info,
             index: OctetStringRef::new(&dict_buf).map_err(io_error)?,
             phrase_seq: PhraseSeqRef {
                 der_bytes: &data_buf.buf,
@@ -1150,52 +1179,26 @@ impl DictionaryBuilder for TrieBuilder {
     }
 
     fn build(&mut self, path: &Path) -> Result<(), BuildDictionaryError> {
+        let err = || BuildDictionaryError::new("failed to finalize dictionary");
         let mut tmpname = path.to_path_buf();
         let pseudo_random = rand();
         tmpname.set_file_name(format!("chewing-{pseudo_random}.dat"));
-        let database = File::create(&tmpname)?;
+        let database = File::create(&tmpname).or_raise(err)?;
         let mut writer = BufWriter::new(&database);
-        self.write(&mut writer)?;
-        writer.flush()?;
-        database.sync_data()?;
-        fs::rename(&tmpname, path)?;
+        self.write(&mut writer).or_raise(err)?;
+        writer.flush().or_raise(err)?;
+        database.sync_data().or_raise(err)?;
+        debug!("rename from {} to {}", tmpname.display(), path.display());
+        fs::rename(&tmpname, path).or_raise(err)?;
         Ok(())
     }
 }
 
-// xoshiro256** PRNG
-//
-// Ref: <https://en.wikipedia.org/wiki/Xorshift#xoshiro256**>
 fn rand() -> u64 {
-    thread_local! {
-        static PRNG_STATE: Cell<[u64; 4]> = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map(|du| {
-                Cell::new([
-                    du.as_secs(),
-                    du.subsec_millis() as u64,
-                    du.subsec_micros() as u64,
-                    du.subsec_nanos() as u64,
-                ])
-            })
-            .unwrap_or_default();
-    }
-    fn rol64(x: u64, k: u32) -> u64 {
-        x.wrapping_shl(k) | x.wrapping_shr(64 - k)
-    }
-    PRNG_STATE.with(|state| {
-        let mut s = state.get();
-        let result = rol64(s[1].wrapping_mul(5), 7).wrapping_mul(9);
-        let t = s[1].wrapping_shl(17);
-        s[2] ^= s[0];
-        s[3] ^= s[1];
-        s[1] ^= s[2];
-        s[0] ^= s[3];
-        s[2] ^= t;
-        s[3] = rol64(s[3], 45);
-        state.set(s);
-        result
-    })
+    use std::collections::hash_map::RandomState;
+    use std::hash::BuildHasher;
+    use std::hash::Hasher;
+    RandomState::new().build_hasher().finish()
 }
 
 impl Default for TrieBuilder {
@@ -1214,8 +1217,8 @@ mod tests {
     use super::{Trie, TrieBuilder};
     use crate::{
         dictionary::{
-            Dictionary, DictionaryBuilder, DictionaryInfo, LookupStrategy, Phrase, TrieOpenOptions,
-            trie::TrieBuilderNode,
+            Dictionary, DictionaryBuilder, DictionaryInfo, DictionaryUsage, LookupStrategy, Phrase,
+            TrieOpenOptions, trie::TrieBuilderNode,
         },
         syl,
         zhuyin::Bopomofo,
@@ -1615,6 +1618,7 @@ mod tests {
             license: "license".into(),
             version: "version".into(),
             software: "software".into(),
+            usage: DictionaryUsage::BuiltIn,
         };
         builder.set_info(info)?;
 

@@ -1,3 +1,36 @@
+What's New in libchewing (unreleased)
+---------------------------------------------------------
+
+* Bug Fixes
+  - dict: ensure user dictionary overrides other builtin dictionaries.
+    (introduced in 0.12.0)
+
+
+What's New in libchewing 0.12.0 (April 6, 2026)
+---------------------------------------------------------
+
+* Features
+  - dict: loading user dictionary are now also controlled by enabled_dicts
+    in `chewing_new3()`.
+  - dict: deleted phrases now can be recorded in a separate chewing-deleted.dat
+    exclusion dictionary. This allows excluding phrases from even built-in
+    dictionaries. Deleted phrases will not be auto learned again.
+  - editor: new config option "chewing.auto_snapshot_selections" (default false)
+    can be used to control whether phrase selections are automatically locked
+    after some condition.
+
+* Bug Fixes
+  - dict: fixed parsing trie dictionary file with extension fields.
+  - dict: fixed trie_buf tombstone is not cleared after adding phrase again.
+  - dict: use max freq of all dictionaries as phrase frequency to avoid repeatedly
+    adding static dictionary freq to user dictionary freq.
+
+* Changes
+  - rust: breaking! renamed SystemDictionaryLoader to AssetLoader.
+  - rust: breaking! renamed UserDictionaryLoader to UserDictionaryManager.
+  - rust: Dictionary trait gained a new `set_usage()` method.
+  - conversion: adjust max output paths down to 10.
+
 What's New in libchewing 0.11.0 (January 10, 2026)
 ---------------------------------------------------------
 
