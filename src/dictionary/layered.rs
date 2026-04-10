@@ -263,11 +263,16 @@ impl Dictionary for Layered {
         syllables: &[Syllable],
         phrase_str: &str,
     ) -> Result<(), UpdateDictionaryError> {
-        self.exclusion_dicts_mut().for_each(|d| {
-            if let Err(error) = d.add_phrase(syllables, (phrase_str, 0).into()) {
-                error!("Failed to add {phrase_str} {syllables:?} to exclusion dictionary: {error}");
-            }
-        });
+        // Only exclude phrases if it's not a single character
+        if syllables.len() > 1 {
+            self.exclusion_dicts_mut().for_each(|d| {
+                if let Err(error) = d.add_phrase(syllables, (phrase_str, 0).into()) {
+                    error!(
+                        "Failed to add {phrase_str} {syllables:?} to exclusion dictionary: {error}"
+                    );
+                }
+            });
+        }
         self.user_dict_mut().remove_phrase(syllables, phrase_str)
     }
 }
@@ -404,6 +409,102 @@ mod tests {
                 &vec![syl![Bopomofo::C, Bopomofo::E, Bopomofo::TONE4]],
                 LookupStrategy::Standard
             ),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_exclusion_dict() -> Result<(), Box<dyn Error>> {
+        let mut sys_dict = TrieBuf::from([
+            (
+                vec![syl![Bopomofo::C, Bopomofo::E, Bopomofo::TONE4]],
+                vec![("測", 100)],
+            ),
+            (
+                vec![
+                    syl![Bopomofo::C, Bopomofo::E, Bopomofo::TONE4],
+                    syl![Bopomofo::SH, Bopomofo::TONE4],
+                ],
+                vec![("測試", 100)],
+            ),
+        ]);
+        sys_dict.set_usage(DictionaryUsage::BuiltIn);
+
+        let mut exclude_dict = TrieBuf::new_in_memory();
+        exclude_dict.set_usage(DictionaryUsage::ExcludeList);
+
+        let mut user_dict = TrieBuf::from([
+            (
+                vec![syl![Bopomofo::C, Bopomofo::E, Bopomofo::TONE4]],
+                vec![("測", 1000)],
+            ),
+            (
+                vec![
+                    syl![Bopomofo::C, Bopomofo::E, Bopomofo::TONE4],
+                    syl![Bopomofo::SH, Bopomofo::TONE4],
+                ],
+                vec![("測試", 1000)],
+            ),
+        ]);
+        user_dict.set_usage(DictionaryUsage::User);
+
+        let mut dict = Layered::new(vec![
+            Box::new(sys_dict),
+            Box::new(user_dict),
+            Box::new(exclude_dict),
+        ]);
+        // Verify baseline
+        assert_eq!(
+            Some(("測", 1000, 0).into()),
+            dict.lookup(
+                &vec![syl![Bopomofo::C, Bopomofo::E, Bopomofo::TONE4]],
+                LookupStrategy::Standard
+            )
+            .first()
+            .cloned(),
+        );
+        assert_eq!(
+            Some(("測試", 1000, 0).into()),
+            dict.lookup(
+                &vec![
+                    syl![Bopomofo::C, Bopomofo::E, Bopomofo::TONE4],
+                    syl![Bopomofo::SH, Bopomofo::TONE4],
+                ],
+                LookupStrategy::Standard
+            )
+            .first()
+            .cloned(),
+        );
+        // Remove a phrase should also exclude it
+        dict.remove_phrase(
+            &vec![
+                syl![Bopomofo::C, Bopomofo::E, Bopomofo::TONE4],
+                syl![Bopomofo::SH, Bopomofo::TONE4],
+            ],
+            "測試",
+        )?;
+        assert_eq!(
+            None,
+            dict.lookup(
+                &vec![
+                    syl![Bopomofo::C, Bopomofo::E, Bopomofo::TONE4],
+                    syl![Bopomofo::SH, Bopomofo::TONE4],
+                ],
+                LookupStrategy::Standard
+            )
+            .first()
+            .cloned(),
+        );
+        // Remove a character should only remove it from the user dict
+        dict.remove_phrase(&vec![syl![Bopomofo::C, Bopomofo::E, Bopomofo::TONE4]], "測")?;
+        assert_eq!(
+            Some(("測", 100, 0).into()),
+            dict.lookup(
+                &vec![syl![Bopomofo::C, Bopomofo::E, Bopomofo::TONE4],],
+                LookupStrategy::Standard
+            )
+            .first()
+            .cloned(),
         );
         Ok(())
     }
