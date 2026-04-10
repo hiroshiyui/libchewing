@@ -5,6 +5,9 @@ What's New in libchewing (unreleased)
   - dict: ensure user dictionary overrides other builtin dictionaries.
     (introduced in 0.12.0)
 
+* Changes
+  - symbols: replaed U+2026 … with U+22EF ⋯ as default.
+
 
 What's New in libchewing 0.12.0 (April 6, 2026)
 ---------------------------------------------------------
