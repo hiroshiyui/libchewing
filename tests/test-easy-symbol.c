@@ -45,7 +45,7 @@ static const TestData EASY_SYMBOL[] = {
     {"J", "\xE2\x89\xA0" /* ≠ */ },
     {"K", "\xE2\x89\x92" /* ≒ */ },
     {"L", "Orz"},
-    {"M", "\xE2\x80\xA6" /* … */ },
+    {"M", "⋯" /* … */ },
 };
 
 static const TestData CHINESE = { "hk4g4<E>", "\xE6\xB8\xAC\xE8\xA9\xA6" /* 測試 */  };

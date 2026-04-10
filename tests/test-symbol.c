@@ -20,7 +20,7 @@
 #include "testhelper.h"
 
 static const TestData SYMBOL[] = {
-    {"`1<E>", "\xE2\x80\xA6" /* … */ },
+    {"`1<E>", "⋯" /* … */ },
     {"`2<E>", "\xE2\x80\xBB" /* ※ */ },
     {"`31<E>", "\xEF\xBC\x8C" /* ， */ },
     {"`32<E>", "\xE3\x80\x81" /* 、 */ },
@@ -316,7 +316,7 @@ static const TestData SYMBOL[] = {
 };
 
 static const char *CAND[] = {
-    "\xE2\x80\xA6" /* … */ ,
+    "⋯" /* … */ ,
     "\xE2\x80\xBB" /* ※ */ ,
     "\xE5\xB8\xB8\xE7\x94\xA8\xE7\xAC\xA6\xE8\x99\x9F" /* 常用符號 */ ,
     "\xE5\xB7\xA6\xE5\x8F\xB3\xE6\x8B\xAC\xE8\x99\x9F" /* 左右括號 */ ,
@@ -417,7 +417,7 @@ void test_nocand_symbol()
     ok_candidate(ctx, CAND, ARRAY_SIZE(CAND));
 
     type_keystroke_by_string(ctx, "1<E>"); /* select … */
-    ok_commit_buffer(ctx, "\xE2\x80\xA6");
+    ok_commit_buffer(ctx, "⋯");
 
     chewing_delete(ctx);
 }

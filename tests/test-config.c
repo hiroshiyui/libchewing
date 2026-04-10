@@ -32,7 +32,7 @@ static const int ALTERNATE_SELECT_KEY[] = {
     'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';'
 };
 
-static const TestData DATA = { "`a", "\xE2\x80\xA6" /* … */  };
+static const TestData DATA = { "`a", "⋯" /* … */  };
 
 void test_has_option()
 {

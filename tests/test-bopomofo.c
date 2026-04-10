@@ -1422,7 +1422,7 @@ void test_Space_selection_word()
 
 void test_Space_selection_symbol()
 {
-    const char CAND_1[] = "\xE2\x80\xA6" /* … */ ;
+    const char CAND_1[] = "⋯" /* … */ ;
     const char CAND_2[] = "\xE9\x9B\x99\xE7\xB7\x9A\xE6\xA1\x86" /* 雙線框 */ ;
 
     ChewingContext *ctx;
