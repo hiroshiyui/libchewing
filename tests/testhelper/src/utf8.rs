@@ -1,5 +1,5 @@
 use std::{
-    ffi::{CStr, c_char, c_int, c_uchar},
+    ffi::{CStr, c_char, c_int},
     ptr, str,
 };
 
@@ -13,7 +13,7 @@ pub unsafe extern "C" fn ueStrLen(str: *const c_char) -> c_int {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ueBytesFromChar(b: c_uchar) -> c_int {
+pub extern "C" fn ueBytesFromChar(b: i64) -> c_int {
     const UTF8LEN_TAB: [c_int; 256] = [
         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
@@ -27,7 +27,10 @@ pub extern "C" fn ueBytesFromChar(b: c_uchar) -> c_int {
         2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5,
         6, 6, 1, 1,
     ];
-    UTF8LEN_TAB[b as usize]
+    // zero out the upper bit due to LLVM bug
+    // https://github.com/llvm/llvm-project/issues/43573
+    let off = b & 0xff;
+    UTF8LEN_TAB[off as usize]
 }
 
 unsafe fn ue_str_nbytes(str: *const c_char, n: c_int) -> c_int {

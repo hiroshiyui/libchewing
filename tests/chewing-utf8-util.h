@@ -14,6 +14,7 @@
 /* *INDENT-ON* */
 
 #include <stddef.h>
+#include <stdint.h>
 
 /**
  * @brief Get the number of characters in UTF-8 string.
@@ -30,7 +31,7 @@ int ueStrLen(const char *str);
  * @param[in] b the leading byte of a UTF-8 character.
  * @return the number of bytes in the sequence of a UTF-8 character.
  */
-int ueBytesFromChar(unsigned char b);
+int ueBytesFromChar(int64_t b);
 
 #define STRNCPY_CLOSE 1
 #define STRNCPY_NOT_CLOSE 0
