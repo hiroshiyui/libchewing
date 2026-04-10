@@ -1,13 +1,15 @@
 [package]
 name = "chewing_testhelper"
-version = "0.0.0"
-edition = "2024"
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+edition.workspace = true
 
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
-chewing = { version = "0.13.0-alpha.0", path = "../.." }
+chewing = { workspace = true }
 
 [features]
 sqlite = ["chewing/sqlite"]

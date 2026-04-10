@@ -1,16 +1,16 @@
 [package]
 name = "chewing_capi"
 description = "The Chewing (酷音) intelligent Zhuyin input method."
-license = "LGPL-2.1-or-later"
-version = "0.13.0-alpha.0"
-rust-version = "1.88"
-edition = "2024"
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+edition.workspace = true
 
 [lib]
 crate-type = ["rlib", "staticlib"]
 
 [dependencies]
-chewing = { version = "0.13.0-alpha.0", path = ".." }
+chewing = { workspace = true }
 env_logger = { workspace = true }
 log = { workspace = true }
 

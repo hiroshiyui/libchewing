@@ -2,10 +2,10 @@
 name = "chewing"
 description = "The Chewing (酷音) intelligent Zhuyin input method."
 documentation = "https://docs.rs/chewing"
-license = "LGPL-2.1-or-later"
-version = "0.13.0-alpha.0"
-rust-version = "1.88.0"
-edition = "2024"
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+edition.workspace = true
 
 include = [
     "src/**/*.rs",
@@ -34,10 +34,18 @@ sqlite-bundled = ["sqlite", "rusqlite/bundled"]
 members = ["capi", "fuzzer", "tests/testhelper", "tools"]
 resolver = "3"
 
+[workspace.package]
+version = "0.13.0-alpha.1"
+license = "LGPL-2.1-or-later"
+rust-version = "1.88.0"
+edition = "2024"
+
 [workspace.dependencies]
 env_logger = "0.11.0"
 log = "0.4.0"
 tempfile = "3.10.1"
+chewing = { version = "0.13.0-alpha.1", path = "." }
+chewing_capi = { version = "0.13.0-alpha.1", path = "./capi" }
 
 [profile.release]
 lto = true

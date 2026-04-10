@@ -357,6 +357,8 @@ int main(int argc, char *argv[])
         drawline(6, 0);
         show_bopomofo_buffer(7, 0, ctx);
         show_full_shape(7, 5, ctx);
+        mvaddstr(7, 20, "v");
+        mvaddstr(7, 21, chewing_version());
         drawline(8, 0);
         mvaddstr(9, 0, "Ctrl + d : leave");
         mvaddstr(9, 20, "Ctrl + b : toggle Eng/Chi mode");
