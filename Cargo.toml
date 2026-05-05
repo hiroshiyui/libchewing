@@ -1,21 +1,41 @@
 [package]
 name = "chewing"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 description = "The Chewing (酷音) intelligent Zhuyin input method."
 documentation = "https://docs.rs/chewing"
-version.workspace = true
 license.workspace = true
-rust-version.workspace = true
-edition.workspace = true
 
 include = [
-    "src/**/*.rs",
-    "src/**/*.asn1",
-    "src/editor/data/*",
-    "Cargo.toml",
-    "AUTHORS",
-    "COPYING",
-    "NEWS",
+  "AUTHORS",
+  "COPYING",
+  "Cargo.toml",
+  "NEWS",
+  "src/**/*.asn1",
+  "src/**/*.rs",
+  "src/editor/data/*",
 ]
+
+[package.metadata.docs.rs]
+features = ["sqlite"]
+
+[workspace]
+resolver = "3"
+members = ["capi", "fuzzer", "tests/testhelper", "tools"]
+
+[workspace.package]
+version = "0.13.0-alpha.2"
+edition = "2024"
+rust-version = "1.88.0"
+license = "LGPL-2.1-or-later"
+
+[workspace.dependencies]
+chewing = { path = ".", version = "0.13.0-alpha.2" }
+chewing_capi = { path = "./capi", version = "0.13.0-alpha.2" }
+env_logger = "0.11.0"
+log = "0.4.0"
+tempfile = "3.10.1"
 
 [dependencies]
 der = { version = "0.7.7", features = ["std"] }
@@ -28,31 +48,11 @@ tempfile = { workspace = true }
 [features]
 default = []
 sqlite = ["dep:rusqlite"]
-sqlite-bundled = ["sqlite", "rusqlite/bundled"]
-
-[workspace]
-members = ["capi", "fuzzer", "tests/testhelper", "tools"]
-resolver = "3"
-
-[workspace.package]
-version = "0.13.0-alpha.1"
-license = "LGPL-2.1-or-later"
-rust-version = "1.88.0"
-edition = "2024"
-
-[workspace.dependencies]
-env_logger = "0.11.0"
-log = "0.4.0"
-tempfile = "3.10.1"
-chewing = { version = "0.13.0-alpha.1", path = "." }
-chewing_capi = { version = "0.13.0-alpha.1", path = "./capi" }
+sqlite-bundled = ["rusqlite/bundled", "sqlite"]
 
 [profile.release]
-lto = true
 opt-level = 3
+debug = true
+lto = true
 panic = "abort"
 codegen-units = 1
-debug = true
-
-[package.metadata.docs.rs]
-features = ["sqlite"]
