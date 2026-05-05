@@ -119,7 +119,6 @@ impl Dictionary for Layered {
     ///
     /// When a phrase appears in multiple dictionaries, the final
     /// frequency is the max of all frequency in all dictionaries.
-    /// However, user dictionary should always take priority.
     ///
     /// Pseudo code
     ///
@@ -159,12 +158,17 @@ impl Dictionary for Layered {
             }
         });
 
-        // User dictionary should override other dictionaries.
+        // NB: User dictionary should override other dictionaries.
+        // However, old libchewing and/or PIME may store user phrase with lower
+        // frequency than built-in dictionaries. Thus it is important to only
+        // override when user frequency is greater than the built-in ones.
+        //
+        // TODO: design a safe upgrade path to migrate to normalized learning.
         for phrase in self.user_dict().lookup(syllables, strategy) {
             match sort_map.entry(phrase.to_string()) {
                 Entry::Occupied(entry) => {
                     let index = *entry.get();
-                    phrases[index].freq = phrase.freq;
+                    phrases[index].freq = u32::max(phrases[index].freq, phrase.freq);
                     phrases[index].last_used = phrase.last_used;
                 }
                 Entry::Vacant(entry) => {
@@ -399,7 +403,7 @@ mod tests {
         assert_eq!(
             [
                 ("側", 100, 0).into(),
-                ("冊", 1, 0).into(),
+                ("冊", 100, 0).into(),
                 ("測", 100, 0).into(),
                 ("策", 1, 0).into(),
             ]

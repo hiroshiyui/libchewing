@@ -2,8 +2,6 @@ What's New in libchewing (unreleased)
 ---------------------------------------------------------
 
 * Bug Fixes
-  - dict: ensure user dictionary overrides other builtin dictionaries.
-    (introduced in 0.12.0)
   - dict: protect single character from being permanently excluded.
 
 * Changes
