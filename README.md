@@ -110,6 +110,16 @@ be built.
    - texinfo >= 4.8
 
 
+### Get libchewing-data
+
+Get libchewing-data via git submudule:
+```shell
+git submodule update
+```
+
+`libchewing-data` will be checked out to folder: `data/`
+
+
 ### Build via CMake
 
 Use the default preset:
