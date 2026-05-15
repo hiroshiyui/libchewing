@@ -112,7 +112,7 @@ be built.
 
 Get libchewing-data via git submudule:
 ```shell
-git submodule update
+git submodule update --init
 ```
 
 `libchewing-data` will be checked out to folder: `data/`
