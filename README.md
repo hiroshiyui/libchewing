@@ -19,7 +19,7 @@ effort, positioning it as a leading libre intelligent phonetic solution among
 major operating environments.
 
 + Website: <https://chewing.im/>
-+ Issue tracker: <https://github.com/chewing/libchewing/issues>
++ Issue tracker: <https://codeberg.org/chewing/libchewing/issues>
 + Mailing lists:
    - Development: <https://groups.google.com/group/chewing-devel>
    - General: <https://groups.google.com/group/chewing>
@@ -27,9 +27,7 @@ major operating environments.
    - Development: <https://matrix.to/#/#libchewing:matrix.org>
    - General: <https://matrix.to/#/#chewing-users:matrix.org>
 + Build Status:
-   - Github Actions: [![CI](https://github.com/chewing/libchewing/actions/workflows/ci.yml/badge.svg)](https://github.com/chewing/libchewing/actions/workflows/ci.yml)
-   - Coverity Scan: [![Coverity Scan Build Status](https://scan.coverity.com/projects/1273/badge.svg)](https://scan.coverity.com/projects/1273)
-   - Codecov: [![codecov](https://codecov.io/gh/chewing/libchewing/graph/badge.svg?token=r1piKsG5uF)](https://codecov.io/gh/chewing/libchewing)
+   - Codeberg Actions: [![CI](https://codeberg.org/chewing/libchewing/actions/workflows/ci.yml/badge.svg)](https://codeberg.org/chewing/libchewing/actions?workflow=ci.yml&actor=0&status=0)
 
 libchewing releases can be verified with the following OpenPGP public key
 
@@ -48,14 +46,14 @@ character selection logic, and an input framework interface for display and
 preference settings.
 
 + The active integration:
-  - [Windows TSF](https://github.com/chewing/windows-chewing-tsf)
+  - [Windows TSF](https://codeberg.org/chewing/windows-chewing-tsf)
   - [PIME](https://github.com/EasyIME/PIME)
-  - [ibus](https://github.com/chewing/ibus-chewing)
+  - [ibus](https://codeberg.org/chewing/ibus-chewing)
   - [HIME](https://hime-ime.github.io/)
   - [fcitx](https://github.com/fcitx/fcitx5-chewing)
   - [Guileless Bopomofo](https://github.com/hiroshiyui/GuilelessBopomofo)
   - [Fcitx5 macOS](https://github.com/fcitx-contrib/fcitx5-macos)
-+ The inactive one: [SCIM](https://github.com/chewing/scim-chewing), standalone Microsoft Windows 32/64-bit ([windows-chewing](https://github.com/chewing/windows-chewing)), mozc, [uim](https://github.com/uim/uim-chewing), [ucimf](https://github.com/matlinuxer2/ucimf), JMCCE, xcin, IIIMF, standalone MacOS X (SpaceChewing), Sun's Java Desktop System Input Method Framework, OpenVanilla Input Method Framework (previous than version 1.0), and OXIM.
++ The inactive one: [SCIM](https://codeberg.org/chewing/scim-chewing), standalone Microsoft Windows 32/64-bit ([windows-chewing](https://codeberg.org/chewing/windows-chewing)), mozc, [uim](https://github.com/uim/uim-chewing), [ucimf](https://github.com/matlinuxer2/ucimf), JMCCE, xcin, IIIMF, standalone MacOS X (SpaceChewing), Sun's Java Desktop System Input Method Framework, OpenVanilla Input Method Framework (previous than version 1.0), and OXIM.
 
 
 ### 2. Support phonetic keyboard layout

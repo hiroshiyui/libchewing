@@ -90,7 +90,7 @@ pub(crate) fn try_load_bin<R: Read>(mut input: R) -> io::Result<Vec<(Vec<Syllabl
         // Due to a bug in 0.3.5, some userphrase has negative frequency value.
         // In this case, we just skip this record.
         //
-        // See https://github.com/chewing/libchewing/issues/75
+        // See https://codeberg.org/chewing/libchewing/issues/75
         if user_freq < 0 || recent_time < 0 || _max_freq < 0 || _orig_freq < 0 {
             continue;
         }

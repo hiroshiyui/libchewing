@@ -156,7 +156,7 @@ void test_enumerate_keyboard_type()
 
 void test_hsu_po_to_bo()
 {
-    // https://github.com/chewing/libchewing/issues/170
+    // https://codeberg.org/chewing/libchewing/issues/170
     ChewingContext *ctx;
 
     ctx = chewing_new();
@@ -180,7 +180,7 @@ void test_hsu()
 
 void test_et26_po_to_bo()
 {
-    // https://github.com/chewing/libchewing/issues/170
+    // https://codeberg.org/chewing/libchewing/issues/170
     ChewingContext *ctx;
 
     ctx = chewing_new();
