@@ -220,7 +220,10 @@ impl ChewingEngine {
         let mut edges = vec![];
         let mut phrases = vec![];
         for start in 0..com.symbols.len() {
-            for end in (start + 1)..=com.symbols.len() {
+            // No phrase in the dictionary is longer than MAX_PHRASE_LEN syllables.
+            const MAX_PHRASE_LEN: usize = 11;
+            let max_end = usize::min(start + MAX_PHRASE_LEN, com.symbols.len());
+            for end in (start + 1)..=max_end {
                 for phrase in self.find_best_phrases(dict, start, &com.symbols[start..end], com) {
                     edges.push(Edge {
                         start,
