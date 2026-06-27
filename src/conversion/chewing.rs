@@ -245,33 +245,51 @@ impl ChewingEngine {
         edges: Vec<Edge>,
         phrases: &[PossiblePhrase],
     ) -> Vec<PossiblePath> {
-        let mut ksp = Vec::with_capacity(k);
-        let mut candidates = vec![];
+        // Yen's "A": every confirmed path
+        let mut ksp: Vec<Vec<Edge>> = Vec::new();
+        let mut candidates: Vec<Vec<Edge>> = Vec::new();
         let mut graph = vec![vec![]; len];
         let mut removed_edges = HashSet::new();
 
         for edge in edges.into_iter() {
             graph[edge.start].push(edge);
         }
-        ksp.push(self.shortest_path(&graph, &removed_edges, 0, len).unwrap());
 
-        for kth in 1..k {
-            let prev = kth - 1;
+        // The text the user actually sees for a path.
+        let signature =
+            |path: &[Edge]| -> String { path.iter().map(|e| phrases[e.sn].to_string()).collect() };
+
+        // De-duplicated output, in cost order.
+        let mut result: Vec<Vec<Edge>> = Vec::with_capacity(k);
+        let mut seen: HashSet<String> = HashSet::new();
+
+        let first = self.shortest_path(&graph, &removed_edges, 0, len).unwrap();
+        seen.insert(signature(&first));
+        result.push(first.clone());
+        ksp.push(first);
+
+        // Bound how many paths we'll confirm while chasing `k` *distinct* outputs,
+        // so equal-text re-segmentations can't make us loop forever.
+        let max_confirmed = k.saturating_mul(8);
+
+        while result.len() < k && ksp.len() < max_confirmed {
+            let prev = ksp.len() - 1;
             for i in 0..ksp[prev].len() {
-                let spur_node = &ksp[prev][i].start;
+                let spur_node = ksp[prev][i].start;
                 let root_path = &ksp[prev][0..i];
 
+                removed_edges.clear();
                 for p in &ksp {
-                    if i < p.len() {
+                    if p.len() > i && &p[0..i] == root_path {
                         removed_edges.insert(p[i].sn);
                     }
                 }
 
-                if let Some(spur_path) = self.shortest_path(&graph, &removed_edges, *spur_node, len)
+                if let Some(spur_path) = self.shortest_path(&graph, &removed_edges, spur_node, len)
                 {
                     let mut total_path = root_path.to_vec();
                     total_path.extend(spur_path);
-                    if !ksp.contains(&total_path) {
+                    if !ksp.contains(&total_path) && !candidates.contains(&total_path) {
                         candidates.push(total_path);
                     }
                 }
@@ -279,10 +297,23 @@ impl ChewingEngine {
             if candidates.is_empty() {
                 break;
             }
-            candidates.sort_unstable_by_key(|k| k.len());
-            ksp.push(candidates.swap_remove(0));
+            candidates.sort_unstable_by(|a, b| {
+                let cost_a: f64 = a.iter().map(|e| e.cost).sum();
+                let cost_b: f64 = b.iter().map(|e| e.cost).sum();
+                cost_a.total_cmp(&cost_b)
+            });
+            let next = candidates.swap_remove(0);
+
+            // Always confirm into A (keeps Yen's state complete) ...
+            ksp.push(next.clone());
+            // ... but only emit it if it renders to text we haven't shown yet.
+            if seen.insert(signature(&next)) {
+                result.push(next);
+            }
         }
-        ksp.into_iter()
+
+        result
+            .into_iter()
             .map(|edges| {
                 edges
                     .into_iter()
@@ -407,8 +438,10 @@ impl PartialOrd for FrontierNode {
 impl Eq for FrontierNode {}
 
 impl PartialEq for FrontierNode {
+    // Consistent with `Ord`: both compare by `cost` so that
+    // `a == b` <=> `a.cmp(&b) == Ordering::Equal`.
     fn eq(&self, other: &Self) -> bool {
-        self.position == other.position
+        self.cost == other.cost
     }
 }
 
@@ -1001,15 +1034,19 @@ mod tests {
     }
 
     #[test]
-    fn convert_pathological_case() {
+    fn convert_collapses_equal_text_resegmentations() {
         let dict = test_dictionary();
         let engine = ChewingEngine::new();
         let mut composition = Composition::new();
         for _ in 0..80 {
             composition.push(Symbol::from(syl![H, A]));
         }
-        assert_eq!(40, engine.convert(&dict, &composition)[0].intervals.len());
-        assert_eq!(41, engine.convert(&dict, &composition)[1].intervals.len());
-        assert_eq!(41, engine.convert(&dict, &composition)[2].intervals.len());
+        let outcomes = engine.convert(&dict, &composition);
+        // Every segmentation of 80 ㄏㄚ (e.g. 40x哈哈, 39x哈哈+2x哈, …) renders to
+        // the identical visible string, so de-duplicating by text leaves exactly
+        // one candidate instead of dozens of equal-looking re-segmentations.
+        assert_eq!(1, outcomes.len());
+        // The cheapest segmentation pairs every ㄏㄚ into 哈哈 -> 40 intervals.
+        assert_eq!(40, outcomes[0].intervals.len());
     }
 }
