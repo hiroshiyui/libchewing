@@ -8,7 +8,7 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-use log::{debug, error, info, warn};
+use log::{debug, error, trace, warn};
 
 use super::{
     Dictionary, DictionaryBuilder, DictionaryInfo, DictionaryUsage, Entries, LookupStrategy,
@@ -136,8 +136,9 @@ impl TrieBuf {
         let mut sort_map = BTreeMap::new();
         let mut phrases: Vec<Phrase> = Vec::new();
 
-        debug!(
-            "lookup {syllables:?} result: {:?}",
+        trace!(
+            "lookup {syllables:?} from {}, result: {:?}",
+            self.about().name,
             self.entries_iter_for(syllables, strategy)
                 .collect::<Vec<_>>()
         );
@@ -250,20 +251,20 @@ impl TrieBuf {
     }
 
     pub(crate) fn sync(&mut self) -> Result<(), UpdateDictionaryError> {
-        info!("Synchronize dictionary from disk...");
+        trace!("Synchronize dictionary from disk...");
         let make_error = |e| UpdateDictionaryError {
             message: "synchornize dictionary from disk failed",
             source: Some(Box::new(e)),
         };
         if let Some(join_handle) = self.join_handle.take() {
             if !join_handle.is_finished() {
-                info!("Aborted. Wait until previous sync is finished.");
+                trace!("Aborted. Wait until previous sync is finished.");
                 self.join_handle = Some(join_handle);
                 return Ok(());
             }
             match join_handle.join() {
                 Ok(Ok(())) => {
-                    info!("Reloading...");
+                    trace!("Reloading...");
                     let mut trie = Trie::open(self.path().unwrap()).map_err(make_error)?;
                     trie.set_usage(self.usage);
                     self.trie = Some(trie);
@@ -287,7 +288,7 @@ impl TrieBuf {
         } else {
             // TODO: reduce reading
             if self.path().is_some() {
-                info!("Reloading...");
+                trace!("Reloading...");
                 let mut trie = Trie::open(self.path().unwrap()).map_err(make_error)?;
                 trie.set_usage(self.usage);
                 self.trie = Some(trie);
@@ -301,13 +302,13 @@ impl TrieBuf {
             message: "failed to save snapshot",
             source: Some(Box::new(e)),
         };
-        info!("Check pointing...");
+        trace!("Check pointing...");
         if self.join_handle.is_some() {
-            info!("Aborted. Wait until previous checkpoint result is handled.");
+            trace!("Aborted. Wait until previous checkpoint result is handled.");
             return;
         }
         if self.trie.is_none() || self.trie.as_ref().unwrap().path().is_none() || !self.dirty {
-            info!("Aborted. Don't need to checkpoint in memory or clean dictionary.");
+            trace!("Aborted. Don't need to checkpoint in memory or clean dictionary.");
             return;
         }
         let snapshot = TrieBuf {
@@ -320,7 +321,7 @@ impl TrieBuf {
         };
         self.join_handle = Some(thread::spawn(move || {
             let mut builder = TrieBuilder::new();
-            info!("Saving snapshot...");
+            trace!("Saving snapshot...");
             builder
                 .set_info(DictionaryInfo {
                     software: software_version(),
@@ -330,14 +331,14 @@ impl TrieBuf {
             for (syllables, phrase) in snapshot.entries() {
                 builder.insert(&syllables, phrase).map_err(make_error)?;
             }
-            info!(
+            trace!(
                 "Flushing snapshot to {}...",
                 snapshot.path().unwrap().display()
             );
             builder
                 .build(snapshot.path().unwrap())
                 .map_err(make_error)?;
-            info!("    Done");
+            trace!("    Done");
             Ok(())
         }));
         self.dirty = false;

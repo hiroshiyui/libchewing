@@ -1,6 +1,9 @@
 //! TODO: doc
 
-use std::cmp::min;
+use std::{
+    cmp::min,
+    fmt::{Debug, Display, Write},
+};
 
 use log::warn;
 
@@ -14,6 +17,31 @@ pub(crate) struct CompositionEditor {
     cursor_stack: Vec<usize>,
     /// TODO
     inner: Composition,
+}
+
+impl Display for CompositionEditor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("#C[")?;
+        for (i, (sym, gap)) in self
+            .inner
+            .symbols()
+            .iter()
+            .zip(self.inner.gaps().iter())
+            .enumerate()
+        {
+            match gap {
+                Gap::Begin => f.write_char('^')?,
+                Gap::Break => f.write_char(' ')?,
+                Gap::Glue => f.write_char('=')?,
+                Gap::Normal => f.write_char(',')?,
+            }
+            if i == self.cursor {
+                f.write_char('|')?;
+            }
+            sym.fmt(f)?;
+        }
+        f.write_char(']')
+    }
 }
 
 impl CompositionEditor {

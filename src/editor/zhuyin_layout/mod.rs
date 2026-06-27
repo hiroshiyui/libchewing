@@ -192,7 +192,7 @@ pub enum KeyBehavior {
 }
 
 /// TODO: docs
-pub trait SyllableEditor: Debug {
+pub trait SyllableEditor: Display + Debug {
     /// Handles a key press event and returns the behavior of the layout.
     fn key_press(&mut self, key: KeyboardEvent) -> KeyBehavior;
     /// Handles a key press event and returns the behavior of the layout.

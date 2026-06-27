@@ -2,6 +2,8 @@
 //!
 //! Another commonly used keyboard layout on older IBM PC.
 
+use std::fmt::Display;
+
 use super::{KeyBehavior, SyllableEditor};
 use crate::input::keycode::*;
 use crate::{
@@ -27,6 +29,12 @@ impl Ibm {
 impl Default for Ibm {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Display for Ibm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Ibm")
     }
 }
 

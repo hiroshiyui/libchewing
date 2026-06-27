@@ -1,5 +1,7 @@
 //! Hsu keyboard layout
 
+use std::fmt::Display;
+
 use super::{KeyBehavior, SyllableEditor};
 use crate::{
     input::KeyboardEvent,
@@ -66,6 +68,12 @@ impl Hsu {
 impl Default for Hsu {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Display for Hsu {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Hsu")
     }
 }
 

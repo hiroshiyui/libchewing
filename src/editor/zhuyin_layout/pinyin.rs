@@ -1,5 +1,7 @@
 //! Pinyin
 
+use std::fmt::Display;
+
 use super::{KeyBehavior, SyllableEditor};
 use crate::{
     input::{KeyboardEvent, keysym},
@@ -68,6 +70,16 @@ impl Pinyin {
     /// TODO: docs
     pub fn key_seq(&self) -> &String {
         &self.key_seq
+    }
+}
+
+impl Display for Pinyin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.variant {
+            PinyinVariant::HanyuPinyin => f.write_str("Pinyin::HanyuPinyin"),
+            PinyinVariant::ThlPinyin => f.write_str("Pinyin::ThlPinyin"),
+            PinyinVariant::Mps2Pinyin => f.write_str("Pinyin::Mps2Pinyin"),
+        }
     }
 }
 

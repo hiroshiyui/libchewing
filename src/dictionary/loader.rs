@@ -102,7 +102,7 @@ impl AssetLoader {
         let parent_path =
             find_path_by_files(&search_path, &[ABBREV_FILE_NAME]).or_raise(not_found)?;
         let abbrev_path = parent_path.join(ABBREV_FILE_NAME);
-        info!("Loading {ABBREV_FILE_NAME}");
+        info!("Load abbrev table: {}", abbrev_path.display());
         AbbrevTable::open(abbrev_path).or_raise(error)
     }
     /// Loads the symbol table.
@@ -117,7 +117,7 @@ impl AssetLoader {
         let parent_path =
             find_path_by_files(&search_path, &[SYMBOLS_FILE_NAME]).or_raise(not_found)?;
         let symbol_path = parent_path.join(SYMBOLS_FILE_NAME);
-        info!("Loading {SYMBOLS_FILE_NAME}");
+        info!("Load symbol table: {}", symbol_path.display());
         SymbolSelector::open(symbol_path).or_raise(error)
     }
 }
@@ -169,7 +169,6 @@ impl UserDictionaryManager {
             return Ok(Self::in_memory());
         }
         if data_path.exists() {
-            info!("Use existing user dictionary {}", data_path.display());
             return loader
                 .guess_format_and_load(&data_path)
                 .map(|mut dict| {
@@ -180,13 +179,10 @@ impl UserDictionaryManager {
         }
         let userdata_dir = data_path.parent().expect("path should contain a filename");
         if !userdata_dir.exists() {
-            info!("Creating userdata_dir: {}", userdata_dir.display());
+            info!("Create user data dir: {}", userdata_dir.display());
             fs::create_dir_all(userdata_dir).or_raise(error)?;
         }
-        info!(
-            "Creating a fresh user dictionary at {}",
-            data_path.display()
-        );
+        info!("Create a fresh user dictionary: {}", data_path.display());
         let mut fresh_dict = loader.guess_format_and_load(&data_path).or_raise(error)?;
 
         let user_dict_path = userdata_dir.join(UD_SQLITE_FILE_NAME);
@@ -194,7 +190,7 @@ impl UserDictionaryManager {
             #[cfg(feature = "sqlite")]
             {
                 info!(
-                    "Importing existing sqlite dictionary at {}",
+                    "Import existing sqlite dictionary: {}",
                     user_dict_path.display()
                 );
                 let dict = SqliteDictionary::open(user_dict_path).or_raise(error)?;
@@ -211,7 +207,7 @@ impl UserDictionaryManager {
             let uhash_path = userdata_dir.join(UD_UHASH_FILE_NAME);
             if uhash_path.exists() {
                 info!(
-                    "Importing existing uhash dictionary at {}",
+                    "Import existing uhash dictionary: {}",
                     user_dict_path.display()
                 );
                 let mut input = File::open(uhash_path).or_raise(error)?;
@@ -249,7 +245,7 @@ impl UserDictionaryManager {
             .or_raise(not_found)?;
         let userdata_dir = data_path.parent().expect("path should contain a filename");
         if !userdata_dir.exists() {
-            info!("Creating userdata_dir: {}", userdata_dir.display());
+            info!("Create user data dir: {}", userdata_dir.display());
             fs::create_dir_all(&userdata_dir).or_raise(error)?;
         }
         let exclude_dict_path = userdata_dir.join("chewing-deleted.dat");
@@ -283,7 +279,7 @@ impl SingleDictionaryLoader {
         dict_path: &PathBuf,
     ) -> Result<Box<dyn Dictionary>, LoadDictionaryError> {
         let error = || LoadDictionaryError::new("failed to parse and load dictionary");
-        info!("Loading dictionary {}", dict_path.display());
+        info!("Load dictionary: {}", dict_path.display());
         if self.migrate_sqlite && dict_path.is_file() {
             let metadata = dict_path.metadata().or_raise(error)?;
             if metadata.permissions().readonly() {

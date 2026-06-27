@@ -3,7 +3,7 @@ use std::{
     fmt::{Debug, Display, Write},
 };
 
-use log::trace;
+use log::{debug, trace};
 
 use super::{Composition, ConversionEngine, Gap, Interval, Outcome, Symbol};
 use crate::{
@@ -39,11 +39,17 @@ impl ChewingEngine {
                 return vec![Outcome::default()];
             }
             let mut paths = self.find_k_paths(Self::MAX_OUT_PATHS, comp.len(), edges, &phrases);
-            trace!("paths: {:#?}", paths);
             debug_assert!(!paths.is_empty());
-
             // TODO: Reranking
             paths.sort_by(|a, b| b.cmp(a));
+
+            if log::log_enabled!(log::Level::Trace) {
+                trace!("Considered paths:");
+                trace!("{paths:#?}");
+            }
+            if log::log_enabled!(log::Level::Debug) {
+                debug_paths(&paths);
+            }
             paths
         };
         paths
@@ -498,16 +504,24 @@ impl Eq for PossiblePath {}
 
 impl Display for PossiblePath {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "#PossiblePath({}", self.total_probability())?;
+        write!(f, "#P({:.2}", self.total_probability())?;
         for interval in &self.intervals {
             write!(
                 f,
-                " ({} {} '{})",
-                interval.start, interval.end, interval.phrase
+                " ({:.2} '{})",
+                interval.phrase.log_prob(),
+                interval.phrase
             )?;
         }
         write!(f, ")")?;
         Ok(())
+    }
+}
+
+fn debug_paths(paths: &[PossiblePath]) {
+    debug!("Considered paths:");
+    for p in paths {
+        debug!("  {p}");
     }
 }
 

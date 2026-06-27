@@ -1,5 +1,7 @@
 //! Dai Chien CP26
 
+use std::fmt::Display;
+
 use super::{KeyBehavior, SyllableEditor};
 use crate::input::keycode::*;
 use crate::{
@@ -47,6 +49,12 @@ fn default_or_alt(source: Option<Bopomofo>, default: Bopomofo, alt: Bopomofo) ->
                 default
             }
         }
+    }
+}
+
+impl Display for DaiChien26 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("DaiChien26")
     }
 }
 

@@ -41,7 +41,9 @@ pub(crate) fn init_scoped_logging(
 impl ChewingLogger {
     pub(crate) fn new() -> ChewingLogger {
         ChewingLogger {
-            env_logger: EnvLogger::from_default_env(),
+            env_logger: env_logger::Builder::from_default_env()
+                .format_timestamp(None)
+                .build(),
         }
     }
 }

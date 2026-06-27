@@ -144,9 +144,9 @@ impl KeyboardEvent {
 
 impl Display for KeyboardEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "#KeyboardEvent(")?;
-        write!(f, ":code {}", self.code.0)?;
-        write!(f, " :ksym {}", self.ksym.0)?;
+        write!(f, "#Key(")?;
+        write!(f, ":code {:02x}", self.code.0)?;
+        write!(f, " :ksym {:02x}", self.ksym.0)?;
         if self.ksym.is_unicode() {
             write!(f, " :char '{}'", self.ksym.to_unicode())?;
         }

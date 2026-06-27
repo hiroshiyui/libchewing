@@ -3,6 +3,8 @@
 //! Also known as the Dai Chien (大千) layout. It's the default layout on almost
 //! all platforms and the most commonly used one.
 
+use std::fmt::Display;
+
 use super::{KeyBehavior, SyllableEditor};
 use crate::input::keycode::*;
 use crate::{
@@ -22,6 +24,12 @@ impl Standard {
         Standard {
             syllable: Syllable::new(),
         }
+    }
+}
+
+impl Display for Standard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Standard")
     }
 }
 

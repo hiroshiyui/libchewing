@@ -286,7 +286,7 @@ impl Editor {
 
     pub fn set_syllable_editor(&mut self, syl: Box<dyn SyllableEditor>) {
         self.shared.syl = syl;
-        info!("Set syllable editor: {:?}", self.shared.syl);
+        info!("Set syllable editor: {}", self.shared.syl);
     }
     pub fn set_conversion_engine(&mut self, engine: Box<dyn ConversionEngine>) {
         self.shared.conv = engine;
@@ -735,7 +735,7 @@ impl SharedState {
     fn commit(&mut self) {
         self.commit_buffer.clear();
         let intervals = self.conversion();
-        debug!("buffer {:?}", self.com);
+        debug!("commit {}", self.com);
         if !self.options.disable_auto_learn_phrase {
             self.auto_learn(&intervals);
         }
@@ -855,7 +855,7 @@ fn collect_new_phrases(intervals: &[Interval], symbols: &[Symbol]) -> Vec<(Vec<S
 
 impl BasicEditor for Editor {
     fn process_keyevent(&mut self, key_event: KeyboardEvent) -> EditorKeyBehavior {
-        debug!("process {}", key_event);
+        info!("process {}", key_event);
         self.shared.estimate.tick();
         // reset?
         self.shared.notice_buffer.clear();
@@ -939,7 +939,7 @@ impl Entering {
         }
     }
     fn start_selecting_or_input_space(&self, editor: &mut SharedState) -> Transition {
-        debug!("buffer {:?}", editor.com);
+        debug!("buffer {}", editor.com);
         match editor.com.symbol_for_select() {
             Some(symbol) => {
                 if symbol.is_syllable() {
@@ -1090,7 +1090,7 @@ impl State for Entering {
                 self.start_selecting_or_input_space(shared)
             }
             SYM_DOWN => {
-                debug!("buffer {:?}", shared.com);
+                debug!("buffer {}", shared.com);
                 self.start_selecting(shared)
             }
             SYM_END | SYM_PAGEUP | SYM_PAGEDOWN => {
@@ -1388,11 +1388,13 @@ impl Selecting {
         }
     }
     fn candidates(&self, editor: &SharedState, dict: &Layered) -> Vec<String> {
-        match &self.sel {
+        let res = match &self.sel {
             Selector::Phrase(sel) => sel.candidates(editor, dict),
             Selector::Symbol(sel) => sel.menu(),
             Selector::SpecialSymmbol(sel) => sel.menu(),
-        }
+        };
+        debug!("show candidates: {res:?}");
+        res
     }
     fn total_page(&self, editor: &SharedState, dict: &Layered) -> usize {
         self.candidates(editor, dict)
@@ -1404,7 +1406,6 @@ impl Selecting {
         match self.sel {
             Selector::Phrase(ref sel) => {
                 let candidates = sel.candidates(editor, &editor.dict);
-                debug!("candidates: {:?}", &candidates);
                 match candidates.get(offset) {
                     Some(phrase) => {
                         let interval = sel.interval(phrase.as_str());

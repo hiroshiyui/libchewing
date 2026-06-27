@@ -206,6 +206,9 @@ impl Composition {
     pub fn symbols(&self) -> &[Symbol] {
         &self.symbols
     }
+    pub fn gaps(&self) -> &[Gap] {
+        &self.gaps
+    }
     pub fn selections(&self) -> &[Interval] {
         &self.selections
     }

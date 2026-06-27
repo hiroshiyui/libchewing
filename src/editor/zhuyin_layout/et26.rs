@@ -1,5 +1,7 @@
 //! ET26 (倚天26鍵)
 
+use std::fmt::Display;
+
 use super::{KeyBehavior, SyllableEditor};
 use crate::{
     input::{
@@ -57,6 +59,12 @@ impl Et26 {
 impl Default for Et26 {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Display for Et26 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Et26")
     }
 }
 
