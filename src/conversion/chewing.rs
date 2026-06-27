@@ -150,7 +150,7 @@ impl ChewingEngine {
         let max_phrases_count = 10;
         // Approximate value. We only use this global for scaling for now, so we can
         // use any value.
-        let global_total: f64 = 1_000_000_000.0;
+        let word_insertion_penalty: f64 = 58376702.0;
         let mut phrases = dict
             .lookup(&syllables, self.lookup_strategy)
             .into_iter()
@@ -173,15 +173,18 @@ impl ChewingEngine {
                 true
             })
             .map(|phrase| {
-                let log_phrase_prob = (phrase.freq().clamp(1, 9999999) as f64 / global_total).ln();
+                const MAX: u32 = 9999999;
+                debug_assert!((MAX as f64) < word_insertion_penalty);
+                let log_phrase_prob =
+                    (phrase.freq().clamp(1, MAX) as f64 / word_insertion_penalty).ln();
                 let log_length_prob: f64 = match syllables.len() {
                     // log probability of phrase lenght calculated from tsi.src
-                    1 => -1.520439227173415,
-                    2 => -0.4236568120124837,
-                    3 => -1.455835986003893,
-                    4 => -1.6178072894679227,
-                    5 => -4.425765184802149,
-                    _ => -4.787357595622411,
+                    1 => -2.063494,
+                    2 => -0.654789,
+                    3 => -1.692290,
+                    4 => -1.872849,
+                    5 => -4.679164,
+                    _ => -5.056246,
                 };
                 let log_prob = log_phrase_prob + log_length_prob;
                 debug_assert!(log_prob.is_normal());
@@ -207,6 +210,7 @@ impl ChewingEngine {
         trace!("best phraces for {:?} is {:?}", symbols, phrases);
         phrases
     }
+
     fn find_edges<D: Dictionary + ?Sized>(
         &self,
         dict: &D,
