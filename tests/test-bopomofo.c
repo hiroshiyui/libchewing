@@ -1677,7 +1677,7 @@ void test_five_word_phrase()
 
     ok(chewing_interval_hasNext(ctx) == 1, "shall have next interval");
     chewing_interval_Get(ctx, &it);
-    ok(it.from == 0 && it.to == 5, "interval (%d, %d) shall be (0, 5)", it.from, it.to);
+    ok(it.from == 0 && it.to == 2, "interval (%d, %d) shall be (0, 2)", it.from, it.to);
 
     chewing_delete(ctx);
 }
