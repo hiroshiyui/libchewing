@@ -309,8 +309,10 @@ impl ChewingEngine {
         source: usize,
         goal: usize,
     ) -> Option<Vec<Edge>> {
+        let mut dist: Vec<f64> = vec![f64::INFINITY; goal + 1];
         let mut back_link: Vec<Option<Edge>> = vec![None; goal + 1];
         let mut frontier = BinaryHeap::new();
+        dist[source] = 0.0;
         frontier.push(FrontierNode {
             position: source,
             cost: 0.0,
@@ -319,7 +321,7 @@ impl ChewingEngine {
             if position == goal {
                 break;
             }
-            if back_link[position].is_some_and(|prev| cost > prev.cost) {
+            if cost > dist[position] {
                 continue;
             }
             if let Some(neighbor_edges) = graph.get(position) {
@@ -327,16 +329,14 @@ impl ChewingEngine {
                     if removed_edges.contains(&edge.sn) {
                         continue;
                     }
-                    let alt = FrontierNode {
-                        position: edge.end,
-                        cost: cost + edge.cost,
-                    };
-                    if back_link[alt.position].is_none_or(|prev| alt.cost < prev.cost) {
-                        back_link[alt.position] = Some(Edge {
-                            cost: alt.cost,
-                            ..*edge
+                    let alt = cost + edge.cost;
+                    if alt < dist[edge.end] {
+                        dist[edge.end] = alt;
+                        back_link[edge.end] = Some(*edge);
+                        frontier.push(FrontierNode {
+                            position: edge.end,
+                            cost: alt,
                         });
-                        frontier.push(alt);
                     }
                 }
             }
