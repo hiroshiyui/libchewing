@@ -1,5 +1,6 @@
 use std::{
     any::Any,
+    collections::{HashMap, HashSet},
     fs::{self, File},
     io::{BufRead, BufReader},
     path::Path,
@@ -16,6 +17,8 @@ use chewing::{
 };
 
 use crate::flags;
+
+const MAX_LEN: usize = 6;
 
 pub(crate) fn run(args: flags::InitDatabase) -> Result<()> {
     let error = "Failed to build dictionary file.";
@@ -47,6 +50,7 @@ pub(crate) fn run(args: flags::InitDatabase) -> Result<()> {
     let delimiter = if args.csv { ',' } else { ' ' };
     let mut read_front_matter = true;
     let mut errors = vec![];
+    let mut phrase_rows: HashMap<String, Vec<(u32, usize)>> = HashMap::new();
 
     for (line_num, line) in reader.lines().enumerate() {
         let line = line.context(error)?;
@@ -82,6 +86,10 @@ pub(crate) fn run(args: flags::InitDatabase) -> Result<()> {
                     errors.push(parse_error(line_num, line, "Word count doesn't match"));
                     continue;
                 }
+                phrase_rows
+                    .entry(phrase.to_string())
+                    .or_default()
+                    .push((freq, syllables.len()));
                 builder
                     .insert(&syllables, (phrase, freq).into())
                     .context(error)?;
@@ -136,7 +144,88 @@ pub(crate) fn run(args: flags::InitDatabase) -> Result<()> {
         eprintln!("Max branch count     : {}", stats.max_branch_count);
         eprintln!("Average branch count : {}", stats.avg_branch_count);
     }
+
+    compute_and_print_length_prob(&phrase_rows);
+
     Ok(())
+}
+
+fn compute_and_print_length_prob(phrase_rows: &HashMap<String, Vec<(u32, usize)>>) {
+    let mut d = 0u64;
+    let mut len_type: HashMap<usize, usize> = HashMap::new();
+    let mut n_aggregate = 0usize;
+    let mut n_per_reading = 0usize;
+    let mut n_mixed_len = 0usize;
+
+    for entries in phrase_rows.values() {
+        let freqs: Vec<u32> = entries.iter().map(|(f, _)| *f).collect();
+        let lens: HashSet<usize> = entries.iter().map(|(_, n)| *n).collect();
+
+        if lens.len() > 1 {
+            n_mixed_len += 1;
+        }
+        let bucket = std::cmp::min(*lens.iter().min().unwrap_or(&MAX_LEN), MAX_LEN);
+
+        let phrase_freq = if entries.len() > 1 && freqs.iter().all(|&f| f == freqs[0]) {
+            n_aggregate += 1;
+            freqs[0]
+        } else {
+            if entries.len() > 1 {
+                n_per_reading += 1;
+            }
+            freqs.iter().map(|&f| f as u64).sum::<u64>() as u32
+        };
+
+        d += phrase_freq as u64;
+        *len_type.entry(bucket).or_insert(0) += 1;
+    }
+
+    let total = len_type.values().sum::<usize>() as f64;
+    let mut p_len: Vec<(usize, f64)> = len_type
+        .iter()
+        .map(|(&n, &count)| (n, count as f64 / total))
+        .collect();
+    p_len.sort_by_key(|(n, _)| *n);
+
+    let s: f64 = p_len.iter().map(|(_, p)| p).sum();
+    assert!((s - 1.0).abs() < 1e-9, "length prob must sum to 1, got {s}");
+
+    let total_rows: usize = phrase_rows.values().map(|v| v.len()).sum();
+
+    eprintln!("");
+    eprintln!("== Length Prior Weighting ==");
+    eprintln!("Distinct phrases       : {}", phrase_rows.len());
+    eprintln!("Total rows (edges)     : {}", total_rows);
+    eprintln!(
+        "Duplicated-aggregate   : {} phrases (counted once)",
+        n_aggregate
+    );
+    eprintln!(
+        "Multi-reading          : {} phrases (summed)",
+        n_per_reading
+    );
+    if n_mixed_len > 0 {
+        eprintln!(
+            "Phrases w/ inconsistent syllable length across readings: {}",
+            n_mixed_len
+        );
+    }
+    eprintln!("D = corrected sum(freq): {}", d);
+    eprintln!("Sum(P_len)             : {:.12}\n", s);
+
+    eprintln!(
+        "{:>4} {:>16} {:>12} {:>14}",
+        "len", "count", "P(len)", "log P(len)"
+    );
+    for (n, p) in &p_len {
+        let label = if *n == MAX_LEN {
+            format!("{}+", n)
+        } else {
+            n.to_string()
+        };
+        let count = len_type.get(n).copied().unwrap_or(0);
+        eprintln!("{:>4} {:>16} {:>12.6} {:>14.6}", label, count, p, p.ln());
+    }
 }
 
 fn parse_line(delimiter: char, line: &str, fix: bool) -> Result<(Vec<Syllable>, &str, u32)> {
