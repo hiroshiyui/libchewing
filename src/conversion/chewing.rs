@@ -39,16 +39,14 @@ impl ChewingEngine {
             if edges.is_empty() {
                 return vec![Outcome::default()];
             }
-            let mut paths = self.find_k_paths(Self::MAX_OUT_PATHS, comp.len(), edges, &phrases);
+            let paths = self.find_k_paths(Self::MAX_OUT_PATHS, comp.len(), edges, &phrases);
             debug_assert!(!paths.is_empty());
             // TODO: Reranking
-            paths.sort_by(|a, b| b.cmp(a));
 
             if log::log_enabled!(log::Level::Trace) {
                 trace!("Considered paths:");
                 trace!("{paths:#?}");
-            }
-            if log::log_enabled!(log::Level::Debug) {
+            } else if log::log_enabled!(log::Level::Debug) {
                 debug_paths(&paths);
             }
             paths
