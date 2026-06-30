@@ -606,6 +606,7 @@ impl SharedState {
             }
         }
         self.nth_conversion = 0;
+        debug!("snapshot current composition: {}", self.com);
     }
     fn cursor(&self) -> usize {
         self.com.cursor()

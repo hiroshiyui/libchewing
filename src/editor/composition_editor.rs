@@ -40,6 +40,10 @@ impl Display for CompositionEditor {
             }
             sym.fmt(f)?;
         }
+        for sel in self.inner.selections() {
+            f.write_char(' ')?;
+            sel.fmt(f)?;
+        }
         f.write_char(']')
     }
 }
