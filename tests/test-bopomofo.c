@@ -598,6 +598,11 @@ void test_select_with_auto_snapshot()
     chewing_set_phraseChoiceRearward(ctx, 1);
     chewing_config_set_int(ctx, "chewing.auto_snapshot_selections", 1);
 
+    type_keystroke_by_string(ctx, "hk4g4<T><T>");
+    ok_preedit_buffer(ctx, "策士");
+
+    chewing_clean_preedit_buf(ctx);
+
     type_keystroke_by_string(ctx, "hk4hk4g4<<><L><L><D><D>5");
     ok_preedit_buffer(ctx, "測策士，");
 

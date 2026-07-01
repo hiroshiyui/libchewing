@@ -864,6 +864,7 @@ impl BasicEditor for Editor {
             self.shared.commit_buffer.clear();
         }
 
+        let orig_nth_conv = self.shared.nth_conversion;
         match self.state.next(&mut self.shared, key_event) {
             Transition::ToState(to_state) => {
                 self.shared.last_key_behavior = EditorKeyBehavior::Absorb;
@@ -882,7 +883,10 @@ impl BasicEditor for Editor {
         if self.is_entering() && self.shared.last_key_behavior == EditorKeyBehavior::Absorb {
             self.shared.try_auto_commit();
         }
-        self.shared.snapshot(false, 5);
+        // Only try to snapshot if we didn't change the conversion candidate
+        if orig_nth_conv == self.shared.nth_conversion {
+            self.shared.snapshot(false, 5);
+        }
         trace!("last_key_behavior = {:?}", self.shared.last_key_behavior);
         trace!("comp: {:?}", &self.shared.com);
         const DIRTY_THRESHOLD: u16 = 0;

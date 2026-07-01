@@ -3,6 +3,8 @@ What's New in libchewing 0.13.0 (unreleased)
 
 * Bug Fixes
   - dict: protect single character from being permanently excluded.
+  - editor: fixed candidate cycling via Tab key when
+    "chewing.auto_snapshot_selections" is enabled.
 
 * Changes
   - symbols: replaed U+2026 … with U+22EF ⋯ as default.
