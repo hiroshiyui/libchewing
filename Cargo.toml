@@ -27,7 +27,7 @@ members = ["capi", "fuzzer", "tests/testhelper", "tools"]
 [workspace.package]
 version = "0.13.0"
 edition = "2024"
-rust-version = "1.88.0"
+rust-version = "1.95.0"
 license = "LGPL-2.1-or-later"
 
 [workspace.dependencies]

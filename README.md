@@ -197,7 +197,7 @@ To ensure libchewing can be built on various Linux distributions, we use the
 minimum rust version available from major distributions' next release branch.
 Data source: https://repology.org/project/rust/versions
 
-* Current MSRV: 1.88.0 (Debian unstable)
+* Current MSRV: 1.95.0 (Debian unstable)
 
 
 ## Usage
