@@ -98,10 +98,10 @@ build libchewing. If any tools you use below this version, libchewing might not
 be built.
 
 + Build tools:
-   - cmake >= 3.21.0
+   - cmake >= 3.27.0
 + Toolchain / IDE:
    - clang >= 3.2 OR gcc >= 4.6.3
-   - Rust >= 1.88
+   - Rust >= 1.95
    - Build Tools for Visual Studio 2022 for MSVC build
    - Vcpkg for MSVC build
 + Documentation tools:
