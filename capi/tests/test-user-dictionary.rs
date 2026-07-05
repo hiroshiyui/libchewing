@@ -174,51 +174,6 @@ fn env_load_chewing_trie() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[cfg(all(target_endian = "little", target_pointer_width = "64"))]
-#[test]
-fn env_load_and_migrate_uhash_le_64_to_trie() -> Result<(), Box<dyn Error>> {
-    use std::ptr::null;
-
-    let syspath = syspath()?;
-    let (tmpdir, _userpath) = tempdir_and_file("chewing.dat")?;
-    let chewing_golden = golden_data_path("golden-uhash-le-64.dat");
-    fs::copy(chewing_golden, tmpdir.path().join("uhash.dat"))?;
-
-    unsafe {
-        let ctx = {
-            let _lock = ENV_LOCK.lock()?;
-            env::set_var("CHEWING_PATH", syspath.to_str()?);
-            env::set_var("CHEWING_USER_PATH", tmpdir.path().display().to_string());
-            chewing_new2(null(), null(), None, null_mut())
-        };
-        assert_phrase_only_in_user_dictionary(ctx)?;
-        chewing_delete(ctx);
-    }
-    Ok(())
-}
-
-#[test]
-fn env_load_and_migrate_uhash_text_to_trie() -> Result<(), Box<dyn Error>> {
-    use std::ptr::null;
-
-    let syspath = syspath()?;
-    let (tmpdir, _userpath) = tempdir_and_file("chewing.dat")?;
-    let chewing_golden = golden_data_path("golden-uhash-text.dat");
-    fs::copy(chewing_golden, tmpdir.path().join("uhash.dat"))?;
-
-    unsafe {
-        let ctx = {
-            let _lock = ENV_LOCK.lock()?;
-            env::set_var("CHEWING_PATH", syspath.to_str()?);
-            env::set_var("CHEWING_USER_PATH", tmpdir.path().display().to_string());
-            chewing_new2(null(), null(), None, null_mut())
-        };
-        assert_phrase_only_in_user_dictionary(ctx)?;
-        chewing_delete(ctx);
-    }
-    Ok(())
-}
-
 #[test]
 fn env_load_and_create_user_path() -> Result<(), Box<dyn Error>> {
     use std::ptr::null;

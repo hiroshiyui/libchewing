@@ -2,8 +2,7 @@ use std::{
     error::Error,
     ffi::OsStr,
     fmt::Display,
-    fs::{self, File},
-    io::{self, Seek},
+    fs, io,
     path::{Path, PathBuf},
 };
 
@@ -11,7 +10,7 @@ use log::{error, info};
 
 #[cfg(feature = "sqlite")]
 use super::SqliteDictionary;
-use super::{Dictionary, TrieBuf, uhash};
+use super::{Dictionary, TrieBuf};
 use crate::exn::{Exn, ResultExt};
 use crate::{
     dictionary::DictionaryUsage,
@@ -19,7 +18,6 @@ use crate::{
     path::{find_files_by_names, find_path_by_files, search_path_from_env_var, userphrase_path},
 };
 
-const UD_UHASH_FILE_NAME: &str = "uhash.dat";
 // const UD_TRIE_FILE_NAME: &str = "chewing.dat";
 const UD_SQLITE_FILE_NAME: &str = "chewing.sqlite3";
 const UD_MEM_FILE_NAME: &str = ":memory:";
@@ -203,30 +201,7 @@ impl UserDictionaryManager {
                 }
                 fresh_dict.flush().or_raise(error)?;
             }
-        } else {
-            let uhash_path = userdata_dir.join(UD_UHASH_FILE_NAME);
-            if uhash_path.exists() {
-                info!(
-                    "Import existing uhash dictionary: {}",
-                    user_dict_path.display()
-                );
-                let mut input = File::open(uhash_path).or_raise(error)?;
-                if let Ok(phrases) = uhash::try_load_bin(&input).or_else(|_| {
-                    input.rewind()?;
-                    uhash::try_load_text(&input)
-                }) {
-                    for (syllables, phrase) in phrases {
-                        let freq = phrase.freq();
-                        let last_used = phrase.last_used().unwrap_or_default();
-                        fresh_dict
-                            .update_phrase(&syllables, phrase, freq, last_used)
-                            .or_raise(error)?;
-                    }
-                    fresh_dict.flush().or_raise(error)?;
-                }
-            }
         }
-
         fresh_dict.set_usage(DictionaryUsage::User);
         Ok(fresh_dict)
     }

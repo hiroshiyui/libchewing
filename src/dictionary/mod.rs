@@ -28,7 +28,6 @@ mod loader;
 mod sqlite;
 mod trie;
 mod trie_buf;
-mod uhash;
 mod usage;
 
 /// A collection of metadata of a dictionary.

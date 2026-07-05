@@ -28,7 +28,6 @@ fi
 clear
 # Simply invoke simulate
 if [ x"$1" = "xrandom" ]; then
-    rm -f uhash.dat
     do_rand_simulate
 else
     do_simulate

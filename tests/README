@@ -20,9 +20,9 @@ Here are the instructions:
 
 Note:
 
-1. The hash data is generated in current path, and feel free
-   to replace with any existing hash.dat like:
-  # cp -f ~/.chewing/uhash.dat .
+1. The user data is generated in current path, and feel free
+   to replace with any existing chewing.dat like:
+  # cp -f ~/.chewing/chewing.dat .
 
 2. The way to debug genkeystroke via gdb is a bit tricky since it uses ncurses
    library.  First, launch two X terminals such as rxvt.  Assume X Terminal (1)
@@ -43,7 +43,7 @@ Note:
 
   Inside gdb debugging session, it is the window, X Terminal (2), launching
   the test suite program, genkeystroke, as usual.  Then, pass the command
-  "tty /dev/ttyp0", obtained from X Terminal (1).  Set the breakpoints and 
+  "tty /dev/ttyp0", obtained from X Terminal (1).  Set the breakpoints and
   run program after that.  Of course, you shall make key strokes inside X
   Terminal (1) instead of X Terminal (2) if you would like to input on test
   suite.
