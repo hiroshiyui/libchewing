@@ -8,8 +8,6 @@ use std::{
 
 use log::{error, info};
 
-#[cfg(feature = "sqlite")]
-use super::SqliteDictionary;
 use super::{Dictionary, TrieBuf};
 use crate::exn::{Exn, ResultExt};
 use crate::{
@@ -19,7 +17,6 @@ use crate::{
 };
 
 // const UD_TRIE_FILE_NAME: &str = "chewing.dat";
-const UD_SQLITE_FILE_NAME: &str = "chewing.sqlite3";
 const UD_MEM_FILE_NAME: &str = ":memory:";
 const ABBREV_FILE_NAME: &str = "swkb.dat";
 const SYMBOLS_FILE_NAME: &str = "symbols.dat";
@@ -182,26 +179,6 @@ impl UserDictionaryManager {
         }
         info!("Create a fresh user dictionary: {}", data_path.display());
         let mut fresh_dict = loader.guess_format_and_load(&data_path).or_raise(error)?;
-
-        let user_dict_path = userdata_dir.join(UD_SQLITE_FILE_NAME);
-        if cfg!(feature = "sqlite") && user_dict_path.exists() {
-            #[cfg(feature = "sqlite")]
-            {
-                info!(
-                    "Import existing sqlite dictionary: {}",
-                    user_dict_path.display()
-                );
-                let dict = SqliteDictionary::open(user_dict_path).or_raise(error)?;
-                for (syllables, phrase) in dict.entries() {
-                    let freq = phrase.freq();
-                    let last_used = phrase.last_used().unwrap_or_default();
-                    fresh_dict
-                        .update_phrase(&syllables, phrase, freq, last_used)
-                        .or_raise(error)?;
-                }
-                fresh_dict.flush().or_raise(error)?;
-            }
-        }
         fresh_dict.set_usage(DictionaryUsage::User);
         Ok(fresh_dict)
     }
@@ -263,24 +240,7 @@ impl SingleDictionaryLoader {
         }
 
         let ext = dict_path.extension().unwrap_or(OsStr::new("unknown"));
-        if ext.eq_ignore_ascii_case("sqlite3") {
-            #[cfg(feature = "sqlite")]
-            {
-                if self.migrate_sqlite {
-                    SqliteDictionary::open(dict_path)
-                        .map(|dict| Box::new(dict) as Box<dyn Dictionary>)
-                        .or_raise(error)
-                } else {
-                    SqliteDictionary::open_readonly(dict_path)
-                        .map(|dict| Box::new(dict) as Box<dyn Dictionary>)
-                        .or_raise(error)
-                }
-            }
-            #[cfg(not(feature = "sqlite"))]
-            {
-                Err(error().with_source(io::Error::from(io::ErrorKind::Unsupported)))
-            }
-        } else if ext.eq_ignore_ascii_case("dat") {
+        if ext.eq_ignore_ascii_case("dat") {
             TrieBuf::open(dict_path)
                 .map(|dict| Box::new(dict) as Box<dyn Dictionary>)
                 .or_raise(error)

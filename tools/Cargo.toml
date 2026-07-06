@@ -18,5 +18,5 @@ optional = true
 
 [features]
 mangen = ["dep:clap_mangen"]
-sqlite = ["chewing/sqlite"]
-sqlite-bundled = ["sqlite", "chewing/sqlite-bundled"]
+sqlite = []
+sqlite-bundled = []

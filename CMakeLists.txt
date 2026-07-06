@@ -58,8 +58,6 @@ endif()
 add_compile_definitions(HAVE_CONFIG_H=1)
 add_custom_target(check COMMAND ${CMAKE_CTEST_COMMAND})
 
-option(WITH_SQLITE3 "Use sqlite3 to store userphrase" true)
-
 # Use valgrind when testing
 option(USE_VALGRIND "Use valgrind when testing" true)
 
@@ -79,14 +77,6 @@ if(BUILD_TESTING)
     corrosion_import_crate(MANIFEST_PATH Cargo.toml CRATES chewing_testhelper)
 endif()
 corrosion_import_crate(MANIFEST_PATH Cargo.toml CRATES chewing-cli)
-
-if(WITH_SQLITE3)
-    corrosion_set_features(chewing_capi FEATURES sqlite)
-    if(BUILD_TESTING)
-        corrosion_set_features(chewing_testhelper FEATURES sqlite)
-    endif()
-    corrosion_set_features(chewing-cli FEATURES sqlite)
-endif()
 
 if(ENABLE_GCOV)
     corrosion_set_env_vars(chewing_capi CARGO_INCREMENTAL=0)
@@ -111,14 +101,6 @@ check_type_size(uint16_t UINT16_T)
 
 set(CURSES_NEED_WIDE true)
 find_package(Curses)
-
-if(WITH_SQLITE3)
-    find_package(SQLite3 REQUIRED)
-    if(SQLite3_FOUND)
-        message(STATUS "Found SQLite3 version ${SQLite3_VERSION}")
-        include_directories(SQLite3_INCLUDE_DIRS)
-    endif()
-endif()
 
 set(SRC_DIR ${PROJECT_SOURCE_DIR}/src)
 set(INC_DIR ${PROJECT_SOURCE_DIR}/capi/include)
@@ -195,7 +177,6 @@ corrosion_set_env_vars(chewing_capi
     CHEWING_DATADIR=${CMAKE_INSTALL_FULL_DATADIR}/libchewing
 )
 target_link_libraries(libchewing PRIVATE chewing_capi)
-target_link_libraries(chewing_capi INTERFACE ${SQLite3_LIBRARIES})
 if(BUILD_SHARED_LIBS)
     if(CMAKE_C_COMPILER_ID MATCHES GNU|^Clang)
         target_link_options(libchewing

@@ -7,6 +7,8 @@ What's New in libchewing 0.14.0 (unreleased)
 * Changes
   - BREAKING: dict: support for auto migration from the legacy
     hash.dat and uhash.dat format has been removed.
+  - BREAKING: dict: support for auto migration from the legacy
+    sqlite format has been removed.
 
 What's New in libchewing 0.13.0 (July 4, 2026)
 ---------------------------------------------------------

@@ -17,7 +17,7 @@
             "displayName": "Default (Release)",
             "description": "Default preset for release build",
             "inherits": [
-                "rust-with-sqlite-release"
+                "rust-release"
             ]
         },
         {
@@ -38,8 +38,7 @@
             "description": "Build libchewing with only rust dependencies",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Debug",
-                "BUILD_INFO": true,
-                "WITH_SQLITE3": false
+                "BUILD_INFO": true
             },
             "inherits": [
                 "build-base"
@@ -62,38 +61,6 @@
             "description": "Build libchewing with only rust dependencies",
             "inherits": [
                 "rust",
-                "coverage-base"
-            ]
-        },
-        {
-            "name": "rust-with-sqlite",
-            "displayName": "Rust with sqlite3 (Debug)",
-            "description": "Build libchewing with rust and sqlite3 user dictionary format",
-            "inherits": [
-                "rust"
-            ],
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Debug",
-                "WITH_SQLITE3": true
-            }
-        },
-        {
-            "name": "rust-with-sqlite-release",
-            "displayName": "Rust with sqlite3 (Release)",
-            "description": "Build libchewing with rust and sqlite3 user dictionary format",
-            "inherits": [
-                "rust-with-sqlite"
-            ],
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Release"
-            }
-        },
-        {
-            "name": "rust-with-sqlite-coverage",
-            "displayName": "Rust with sqlite3 (Debug Coverage)",
-            "description": "Build libchewing with rust and sqlite3 user dictionary format",
-            "inherits": [
-                "rust-with-sqlite",
                 "coverage-base"
             ]
         }

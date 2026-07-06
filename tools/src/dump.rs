@@ -5,8 +5,6 @@ use std::{
 };
 
 use anyhow::{Result, bail};
-#[cfg(feature = "sqlite")]
-use chewing::dictionary::SqliteDictionary;
 use chewing::dictionary::{Dictionary, Trie};
 
 use crate::flags;
@@ -17,16 +15,7 @@ pub(crate) fn run(args: flags::Dump) -> Result<()> {
         .extension()
         .ok_or(anyhow::anyhow!("Unknown dictionary format."))?;
     let dict: Box<dyn Dictionary> = if ext.eq_ignore_ascii_case("sqlite3") {
-        if cfg!(feature = "sqlite") {
-            #[cfg(feature = "sqlite")]
-            {
-                Box::new(SqliteDictionary::open(&args.path)?)
-            }
-            #[cfg(not(feature = "sqlite"))]
-            unreachable!();
-        } else {
-            bail!("sqlite3 dictionary format support was not enabled.");
-        }
+        bail!("sqlite3 dictionary format support was not removed.");
     } else {
         Box::new(Trie::open(&args.path)?)
     };

@@ -14,8 +14,6 @@ pub use self::loader::{
     AssetLoader, DEFAULT_DICT_NAMES, LoadDictionaryError, SingleDictionaryLoader,
     UserDictionaryManager,
 };
-#[cfg(feature = "sqlite")]
-pub use self::sqlite::{SqliteDictionary, SqliteDictionaryBuilder, SqliteDictionaryError};
 pub use self::trie::{Trie, TrieBuilder, TrieOpenOptions, TrieStatistics};
 pub use self::trie_buf::TrieBuf;
 pub use self::usage::DictionaryUsage;
@@ -24,8 +22,6 @@ use crate::zhuyin::Syllable;
 
 mod layered;
 mod loader;
-#[cfg(feature = "sqlite")]
-mod sqlite;
 mod trie;
 mod trie_buf;
 mod usage;

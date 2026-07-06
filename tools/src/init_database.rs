@@ -6,11 +6,8 @@ use std::{
     path::Path,
 };
 
-#[cfg(not(feature = "sqlite"))]
 use anyhow::bail;
 use anyhow::{Context, Result};
-#[cfg(feature = "sqlite")]
-use chewing::dictionary::SqliteDictionaryBuilder;
 use chewing::{
     dictionary::{DictionaryBuilder, DictionaryInfo, TrieBuilder},
     zhuyin::{Bopomofo, Syllable},
@@ -28,12 +25,7 @@ pub(crate) fn run(args: flags::InitDatabase) -> Result<()> {
 
     let mut builder: Box<dyn DictionaryBuilder> = match args.db_type {
         flags::DbType::Sqlite => {
-            #[cfg(feature = "sqlite")]
-            {
-                Box::new(SqliteDictionaryBuilder::new())
-            }
-            #[cfg(not(feature = "sqlite"))]
-            bail!("sqlite3 dictionary format support was not enabled.");
+            bail!("sqlite3 dictionary format support was not removed.");
         }
         flags::DbType::Trie => Box::new(TrieBuilder::new()),
     };

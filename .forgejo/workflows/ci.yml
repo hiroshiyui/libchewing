@@ -23,7 +23,6 @@ jobs:
         os: [fedora-latest]
         preset:
           - rust-release
-          - rust-with-sqlite-release
     runs-on: ${{ matrix.os }}
     name: ${{ matrix.os }}, preset=${{ matrix.preset }}
 
@@ -33,7 +32,7 @@ jobs:
           submodules: true
 
       - if: ${{ matrix.os == 'fedora-latest' }}
-        run: sudo dnf install -y cmake ninja-build sqlite-devel swift-lang
+        run: sudo dnf install -y cmake ninja-build swift-lang
       - if: ${{ matrix.os == 'macos-latest' }}
         run: brew install ninja
       # - if: ${{ matrix.os == 'windows-latest' }}
@@ -41,11 +40,6 @@ jobs:
       - if: ${{ matrix.os == 'windows-latest' }}
         run: |
           choco install ninja
-          echo VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT >> $env:GITHUB_ENV
-          echo CMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake >> $env:GITHUB_ENV
-          echo VCPKG_TARGET_TRIPLET=x64-windows-static >> $env:GITHUB_ENV
-          & $env:VCPKG_INSTALLATION_ROOT\vcpkg install --triplet x64-windows-static sqlite3
-          & $env:VCPKG_INSTALLATION_ROOT\vcpkg install --triplet x64-windows-static-md sqlite3
 
       - name: Setup rustup
         run: |
@@ -91,12 +85,11 @@ jobs:
       matrix:
         preset:
           - rust-coverage
-          - rust-with-sqlite-coverage
     runs-on: fedora-latest
     name: Coverage preset=${{ matrix.preset }}
 
     steps:
-      - run: sudo dnf -y install clang cmake ninja-build sqlite-devel llvm rustup bzip2 git gnupg2
+      - run: sudo dnf -y install clang cmake ninja-build llvm rustup bzip2 git gnupg2
 
       - uses: actions/checkout@v6
         with:

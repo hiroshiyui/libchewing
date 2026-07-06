@@ -12,7 +12,7 @@ pub(crate) fn run(args: flags::Info) -> Result<()> {
         // FIXME: use find_files_by_ext and generic loader
         let loader = SingleDictionaryLoader::new();
         let search_path = search_path_from_env_var();
-        let files = find_files_by_ext(&search_path, &["dat", "sqlite3"]);
+        let files = find_files_by_ext(&search_path, &["dat"]);
         let dictionaries: Vec<_> = files
             .iter()
             .filter(|file_name| !file_name.ends_with("chewing.dat"))
