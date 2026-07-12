@@ -1,3 +1,11 @@
+What's New in libchewing 0.13.1 (unreleased)
+---------------------------------------------------------
+
+* Bug Fixes
+  - dict: use default user path when only sys path is customized.
+    (introduced in 0.12.0)
+
+
 What's New in libchewing 0.13.0 (July 4, 2026)
 ---------------------------------------------------------
 
