@@ -8,7 +8,7 @@ use std::{
     mem,
 };
 
-use log::{debug, error, info, trace, warn};
+use log::{debug, error, info, warn};
 
 pub use self::estimate::{LaxUserFreqEstimate, UserFreqEstimate};
 pub use self::{abbrev::AbbrevTable, selection::symbol::SymbolSelector};
@@ -883,12 +883,16 @@ impl BasicEditor for Editor {
         if self.is_entering() && self.shared.last_key_behavior == EditorKeyBehavior::Absorb {
             self.shared.try_auto_commit();
         }
-        // Only try to snapshot if we didn't change the conversion candidate
-        if orig_nth_conv == self.shared.nth_conversion {
+        if self.shared.nth_conversion > 0 && self.shared.nth_conversion == orig_nth_conv {
+            // Force snapshot if the user Tab multiple times and then
+            // start typing or move the cursor
+            self.shared.snapshot(true, 0);
+        } else if self.shared.nth_conversion == 0 {
+            // Only try to auto snapshot if we didn't change the conversion candidate
             self.shared.snapshot(false, 5);
         }
-        trace!("last_key_behavior = {:?}", self.shared.last_key_behavior);
-        trace!("comp: {:?}", &self.shared.com);
+        debug!("last_key_behavior = {:?}", self.shared.last_key_behavior);
+        debug!("comp: {:?}", &self.shared.com);
         const DIRTY_THRESHOLD: u16 = 0;
         if self.shared.dirty_level > DIRTY_THRESHOLD {
             let _ = self.shared.dict.reopen();
