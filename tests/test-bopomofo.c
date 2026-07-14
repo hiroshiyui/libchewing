@@ -609,6 +609,27 @@ void test_select_with_auto_snapshot()
     chewing_delete(ctx);
 }
 
+void test_move_after_select_with_tab()
+{
+    ChewingContext *ctx;
+
+    clean_userphrase();
+
+    ctx = chewing_new();
+    start_testcase(ctx);
+    chewing_config_set_int(ctx, "chewing.auto_snapshot_selections", 0);
+
+    type_keystroke_by_string(ctx, "u4g4hk4g4<T><T><L><R>");
+    ok_preedit_buffer(ctx, "易事測試");
+
+    chewing_config_set_int(ctx, "chewing.auto_snapshot_selections", 1);
+
+    type_keystroke_by_string(ctx, "u4g4hk4g4<T><T><L>");
+    ok_preedit_buffer(ctx, "易事測試易事測試");
+
+    chewing_delete(ctx);
+}
+
 void test_select_candidate()
 {
     test_select_candidate_no_rearward();
@@ -628,6 +649,7 @@ void test_select_candidate()
     test_select_candidate_sorted();
     test_select_without_auto_snapshot();
     test_select_with_auto_snapshot();
+    test_move_after_select_with_tab();
 }
 
 void test_Esc_not_entering_chewing()
