@@ -9,10 +9,11 @@ use std::{
 use log::{error, info};
 
 use super::{Dictionary, TrieBuf};
-use crate::exn::{Exn, ResultExt};
 use crate::{
     dictionary::DictionaryUsage,
     editor::{AbbrevTable, SymbolSelector},
+    exn::{Exn, ResultExt},
+    path::custom_search_path_and_env_var,
     path::{find_files_by_names, find_path_by_files, search_path_from_env_var, userphrase_path},
 };
 
@@ -49,7 +50,7 @@ impl AssetLoader {
         T: AsRef<str>,
     {
         let search_path = if let Some(path) = &self.search_path {
-            path.to_owned()
+            custom_search_path_and_env_var(&path)
         } else {
             search_path_from_env_var()
         };

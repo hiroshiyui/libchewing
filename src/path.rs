@@ -34,6 +34,23 @@ fn file_exists(path: &Path) -> bool {
     }
 }
 
+pub(crate) fn custom_search_path_and_env_var(sys_path: &str) -> String {
+    let mut paths = vec![];
+    if let Some(user_datadir) = data_dir() {
+        paths.push(
+            user_datadir
+                .join(DICT_FOLDER)
+                .to_string_lossy()
+                .into_owned(),
+        );
+        paths.push(user_datadir.to_string_lossy().into_owned());
+    }
+    paths.push(sys_path.to_string());
+    let chewing_path = paths.join(&SEARCH_PATH_SEP.to_string());
+    debug!("Using search path: {}", chewing_path);
+    chewing_path
+}
+
 pub fn search_path_from_env_var() -> String {
     let mut paths = vec![];
     if let Some(user_datadir) = data_dir() {

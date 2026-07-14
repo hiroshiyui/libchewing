@@ -1,14 +1,21 @@
 What's New in libchewing 0.14.0 (unreleased)
 ---------------------------------------------------------
 
-* Bug Fixes
-  - build: adjust cmake minimum required version to 3.27.0.
-
 * Changes
   - BREAKING: dict: support for auto migration from the legacy
     hash.dat and uhash.dat format has been removed.
   - BREAKING: dict: support for auto migration from the legacy
     sqlite format has been removed.
+
+What's New in libchewing 0.13.1 (July 15, 2026)
+---------------------------------------------------------
+
+* Bug Fixes
+  - dict: use default user path when only sys path is customized.
+    (introduced in 0.12.0)
+  - conversion: snapshot current selections after exiting Tab
+    triggered candidate cycling.
+  - build: adjust cmake minimum required version to 3.27.0.
 
 What's New in libchewing 0.13.0 (July 4, 2026)
 ---------------------------------------------------------
