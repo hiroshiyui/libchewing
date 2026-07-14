@@ -6,6 +6,7 @@ What's New in libchewing 0.13.1 (July 15, 2026)
     (introduced in 0.12.0)
   - conversion: snapshot current selections after exiting Tab
     triggered candidate cycling.
+  - build: adjust cmake minimum required version to 3.27.0.
 
 
 What's New in libchewing 0.13.0 (July 4, 2026)
