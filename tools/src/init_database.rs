@@ -10,6 +10,7 @@ use anyhow::bail;
 use anyhow::{Context, Result};
 use chewing::{
     dictionary::{DictionaryBuilder, DictionaryInfo, TrieBuilder},
+    grapheme::graphemes,
     zhuyin::{Bopomofo, Syllable},
 };
 
@@ -74,7 +75,7 @@ pub(crate) fn run(args: flags::InitDatabase) -> Result<()> {
         }
         match parse_line(delimiter, &line, args.fix) {
             Ok((syllables, phrase, freq)) => {
-                if syllables.len() != phrase.chars().count() {
+                if syllables.len() != graphemes(&phrase).count() {
                     errors.push(parse_error(line_num, line, "Word count doesn't match"));
                     continue;
                 }
