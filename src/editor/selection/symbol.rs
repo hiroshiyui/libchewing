@@ -93,11 +93,9 @@ impl SpecialSymbolSelector {
         self.find_category()
             .and_then(|cat| cat.chars().skip(1).nth(n).map(Symbol::from))
     }
-    fn find_category(&self) -> Option<&str> {
-        Self::TABLE
-            .iter()
-            .find(|cat| cat.contains(self.symbol.to_char().unwrap()))
-            .copied()
+    fn find_category(&self) -> Option<&'static str> {
+        let symbol = self.symbol.as_str()?;
+        Self::TABLE.iter().find(|cat| cat.contains(symbol)).copied()
     }
     const TABLE: &'static [&'static str; 55] = &[
         "0ø",

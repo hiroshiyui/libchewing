@@ -635,7 +635,7 @@ impl SharedState {
             return Err("加詞失敗：字數不符或夾雜符號".to_owned());
         }
         let symbols = self.com.symbols()[start..end].to_vec();
-        if symbols.iter().any(Symbol::is_char) {
+        if symbols.iter().any(Symbol::is_grapheme) {
             return Err("加詞失敗：字數不符或夾雜符號".to_owned());
         }
         let syllables: Vec<Syllable> = symbols

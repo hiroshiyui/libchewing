@@ -1,7 +1,7 @@
 use std::{
     cmp::{Ordering, Reverse},
     collections::{BTreeSet, BinaryHeap},
-    fmt::{Debug, Display, Write},
+    fmt::{Debug, Display},
 };
 
 use log::{debug, trace};
@@ -9,6 +9,7 @@ use log::{debug, trace};
 use super::{Composition, ConversionEngine, Gap, Interval, Outcome, Symbol};
 use crate::{
     dictionary::{Dictionary, LookupStrategy, Phrase},
+    grapheme::{Grapheme, graphemes},
     zhuyin::Syllable,
 };
 
@@ -132,12 +133,12 @@ impl ChewingEngine {
         }
 
         if symbols.len() == 1
-            && let Some(sym) = symbols[0].to_char()
+            && let Some(sym) = symbols[0].to_grapheme()
         {
             return vec![PossiblePhrase::Symbol(sym)];
         }
 
-        if symbols.iter().any(|sym| sym.is_char()) {
+        if symbols.iter().any(|sym| sym.is_grapheme()) {
             return vec![];
         }
 
@@ -160,7 +161,7 @@ impl ChewingEngine {
                         let offset = selection.start - start;
                         let len = selection.end - selection.start;
                         let substring: String =
-                            phrase.as_str().chars().skip(offset).take(len).collect();
+                            graphemes(phrase.as_str()).skip(offset).take(len).collect();
                         if substring != selection.text.as_ref() {
                             return false;
                         }
@@ -426,7 +427,7 @@ impl Ord for OrderedF64 {
 
 #[derive(Debug, Clone, PartialEq)]
 enum PossiblePhrase {
-    Symbol(char),
+    Symbol(Grapheme),
     Phrase(Phrase, f64),
 }
 
@@ -442,7 +443,7 @@ impl PossiblePhrase {
 impl Display for PossiblePhrase {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PossiblePhrase::Symbol(sym) => f.write_char(*sym),
+            PossiblePhrase::Symbol(sym) => f.write_str(sym.as_str()),
             PossiblePhrase::Phrase(phrase, _) => f.write_str(phrase.as_str()),
         }
     }
@@ -451,7 +452,7 @@ impl Display for PossiblePhrase {
 impl From<PossiblePhrase> for Box<str> {
     fn from(value: PossiblePhrase) -> Self {
         match value {
-            PossiblePhrase::Symbol(sym) => sym.to_string().into_boxed_str(),
+            PossiblePhrase::Symbol(sym) => sym.as_str().into(),
             PossiblePhrase::Phrase(phrase, _) => phrase.into(),
         }
     }

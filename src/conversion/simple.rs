@@ -22,12 +22,12 @@ impl SimpleEngine {
             {
                 continue;
             }
-            if sym.is_char() {
+            if let Some(text) = sym.as_str() {
                 intervals.push(Interval {
                     start: i,
                     end: i + 1,
                     is_phrase: false,
-                    text: sym.to_char().unwrap().to_string().into_boxed_str(),
+                    text: text.into(),
                 });
             } else {
                 let phrase = dict

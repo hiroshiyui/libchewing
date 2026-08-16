@@ -9,7 +9,11 @@ pub use self::chewing::ChewingEngine;
 pub use self::fuzzy::FuzzyChewingEngine;
 pub use self::simple::SimpleEngine;
 pub(crate) use self::symbol::{full_width_symbol_input, special_symbol_input};
-use crate::{dictionary::Dictionary, zhuyin::Syllable};
+use crate::{
+    dictionary::Dictionary,
+    grapheme::{Grapheme, graphemes},
+    zhuyin::Syllable,
+};
 
 mod chewing;
 mod fuzzy;
@@ -83,12 +87,14 @@ impl Interval {
     }
     /// Return the texts in the interval
     pub fn sub_intervals(&self) -> impl Iterator<Item = Interval> {
-        self.text.chars().enumerate().map(|(offset, ch)| Interval {
-            start: self.start + offset,
-            end: self.start + offset + 1,
-            is_phrase: self.is_phrase,
-            text: ch.to_string().into_boxed_str(),
-        })
+        graphemes(&self.text)
+            .enumerate()
+            .map(|(offset, ch)| Interval {
+                start: self.start + offset,
+                end: self.start + offset + 1,
+                is_phrase: self.is_phrase,
+                text: ch.into(),
+            })
     }
 }
 
@@ -106,19 +112,22 @@ pub enum Gap {
 }
 
 /// A smallest unit of input in the pre-edit buffer.
+// A grapheme keeps its codepoints inline so that Symbol stays Copy, which makes
+// the variants differ a lot in size.
+#[allow(variant_size_differences)]
 #[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Ord)]
 pub enum Symbol {
     /// Chinese syllable
     Syllable(Syllable),
-    /// Any direct character
-    Char(char),
+    /// Any direct character, which can be made of multiple codepoints
+    Grapheme(Grapheme),
 }
 
 impl Debug for Symbol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Symbol::Syllable(syl) => f.debug_tuple("S").field(&syl.to_string()).finish(),
-            Symbol::Char(ch) => f.debug_tuple("C").field(&ch).finish(),
+            Symbol::Grapheme(ch) => f.debug_tuple("C").field(&ch).finish(),
         }
     }
 }
@@ -127,19 +136,26 @@ impl Symbol {
     pub fn is_syllable(&self) -> bool {
         matches!(self, Symbol::Syllable(_))
     }
-    pub fn is_char(&self) -> bool {
-        matches!(self, Symbol::Char(_))
+    pub fn is_grapheme(&self) -> bool {
+        matches!(self, Symbol::Grapheme(_))
     }
     pub fn to_syllable(self) -> Option<Syllable> {
         match self {
             Symbol::Syllable(syllable) => Some(syllable),
-            Symbol::Char(_) => None,
+            Symbol::Grapheme(_) => None,
         }
     }
-    pub fn to_char(self) -> Option<char> {
+    pub fn to_grapheme(self) -> Option<Grapheme> {
         match self {
             Symbol::Syllable(_) => None,
-            Symbol::Char(c) => Some(c),
+            Symbol::Grapheme(ch) => Some(ch),
+        }
+    }
+    /// Returns the text of a grapheme, or `None` for a syllable.
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            Symbol::Syllable(_) => None,
+            Symbol::Grapheme(ch) => Some(ch.as_str()),
         }
     }
 }
@@ -150,9 +166,15 @@ impl From<Syllable> for Symbol {
     }
 }
 
+impl From<Grapheme> for Symbol {
+    fn from(value: Grapheme) -> Self {
+        Symbol::Grapheme(value)
+    }
+}
+
 impl From<char> for Symbol {
     fn from(value: char) -> Self {
-        Symbol::Char(value)
+        Symbol::Grapheme(value.into())
     }
 }
 
@@ -335,5 +357,41 @@ impl Composition {
         self.symbols.clear();
         self.gaps.clear();
         self.selections.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Interval;
+
+    #[test]
+    fn sub_intervals_split_multi_codepoint_characters() {
+        let interval = Interval {
+            start: 3,
+            end: 5,
+            is_phrase: true,
+            // 邊 with a variation selector, then 好
+            text: "\u{908A}\u{E0100}\u{597D}".into(),
+        };
+
+        let sub: Vec<_> = interval.sub_intervals().collect();
+
+        assert_eq!(
+            vec![
+                Interval {
+                    start: 3,
+                    end: 4,
+                    is_phrase: true,
+                    text: "\u{908A}\u{E0100}".into(),
+                },
+                Interval {
+                    start: 4,
+                    end: 5,
+                    is_phrase: true,
+                    text: "\u{597D}".into(),
+                },
+            ],
+            sub
+        );
     }
 }
