@@ -21,7 +21,7 @@ use super::{
     BuildDictionaryError, Dictionary, DictionaryBuilder, DictionaryInfo, Entries, LookupStrategy,
     Phrase,
 };
-use crate::{dictionary::DictionaryUsage, exn::ResultExt, zhuyin::Syllable};
+use crate::{dictionary::DictionaryUsage, exn::ResultExt, grapheme::graphemes, zhuyin::Syllable};
 
 const DICT_FORMAT_VERSION: u8 = 0;
 
@@ -975,7 +975,7 @@ impl TrieBuilder {
                         //
                         // NB: this must use a stable sorting algorithm so that lookup
                         // results are stable according to the input file.
-                        match (a.as_str().chars().count(), b.as_str().chars().count()) {
+                        match (graphemes(a.as_str()).count(), graphemes(b.as_str()).count()) {
                             (1, 1) => Ordering::Equal,
                             (1, _) | (_, 1) => a.as_str().len().cmp(&b.as_str().len()),
                             _ => {
@@ -1287,6 +1287,56 @@ mod tests {
                 }
             ],
             builder.arena
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tree_lookup_phrase_of_multi_codepoint_characters() -> Result<(), Box<dyn std::error::Error>>
+    {
+        // 邊 and 好, each followed by a variation selector, so the phrase is
+        // four codepoints but two characters
+        let phrase = "\u{908A}\u{E0100}\u{597D}\u{E0100}";
+        let syllables = [
+            syl![Bopomofo::B, Bopomofo::I, Bopomofo::AN],
+            syl![Bopomofo::H, Bopomofo::AU, Bopomofo::TONE3],
+        ];
+
+        let mut builder = TrieBuilder::new();
+        builder.insert(&syllables, (phrase, 100).into())?;
+        let mut cursor = Cursor::new(vec![]);
+        builder.write(&mut cursor)?;
+        cursor.rewind()?;
+        let dict = Trie::new(&mut cursor)?;
+
+        assert_eq!(
+            vec![Phrase::new(phrase, 100)],
+            dict.lookup(&syllables, LookupStrategy::Standard)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tree_keeps_multi_codepoint_word_leaves_in_input_order()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Both entries are a single character, so neither is sorted and they
+        // keep the order of the source file. Counting codepoints instead of
+        // characters would treat the variation sequence as a phrase and sort
+        // it after the plain character.
+        let ivs = "\u{518A}\u{E0100}";
+        let syllables = [syl![Bopomofo::C, Bopomofo::E, Bopomofo::TONE4]];
+
+        let mut builder = TrieBuilder::new();
+        builder.insert(&syllables, (ivs, 1).into())?;
+        builder.insert(&syllables, ("冊", 1).into())?;
+        let mut cursor = Cursor::new(vec![]);
+        builder.write(&mut cursor)?;
+        cursor.rewind()?;
+        let dict = Trie::new(&mut cursor)?;
+
+        assert_eq!(
+            vec![Phrase::new(ivs, 1), Phrase::new("冊", 1)],
+            dict.lookup(&syllables, LookupStrategy::Standard)
         );
         Ok(())
     }
