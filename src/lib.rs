@@ -81,6 +81,7 @@ mod exn;
 pub mod conversion;
 pub mod dictionary;
 pub mod editor;
+pub mod grapheme;
 pub mod input;
 pub mod path;
 pub mod zhuyin;
