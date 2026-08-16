@@ -27,6 +27,7 @@ use crate::{
         UpdateDictionaryError, UserDictionaryManager,
     },
     exn::{Exn, ResultExt},
+    grapheme::{Grapheme, graphemes},
     input::{KeyState, KeyboardEvent, keysym::*},
     zhuyin::Syllable,
 };
@@ -643,12 +644,12 @@ impl SharedState {
             .map(|s| s.to_syllable().unwrap_or_default())
             .collect();
         // FIXME
-        let phrase = self
+        let buffer = self
             .conversion()
             .into_iter()
             .map(|interval| interval.text)
-            .collect::<String>()
-            .chars()
+            .collect::<String>();
+        let phrase = graphemes(&buffer)
             .skip(start)
             .take(end - start)
             .collect::<String>();
@@ -670,13 +671,13 @@ impl SharedState {
         result.map(|_| phrase)
     }
     fn learn_phrase(&mut self, syllables: &[Syllable], phrase: &str) -> Result<(), EditorError> {
-        if syllables.len() != phrase.chars().count() {
+        if syllables.len() != graphemes(phrase).count() {
             warn!(
                 "syllables({:?})[{}] and phrase({})[{}] has different length",
                 &syllables,
                 syllables.len(),
                 &phrase,
-                phrase.chars().count()
+                graphemes(phrase).count()
             );
             return Err(UpdateDictionaryError::new(
                 "failed to learn phrase: syllables and phrase has different length",
@@ -1166,8 +1167,8 @@ impl State for Entering {
                         if shared.options.easy_symbol_input && ev.is_state_on(KeyState::Shift) {
                             // Priortize symbol input
                             if let Some(expended) = shared.abbr.find_abbrev(ev.ksym.to_unicode()) {
-                                expended
-                                    .chars()
+                                graphemes(expended)
+                                    .filter_map(|ch| Grapheme::try_from(ch).ok())
                                     .for_each(|ch| shared.com.insert(Symbol::from(ch)));
                                 shared.snapshot(false, 0);
                                 return self.spin_absorb();
@@ -1672,7 +1673,7 @@ mod tests {
     use crate::editor::LanguageMode;
     use crate::{
         conversion::{ChewingEngine, Interval, Symbol},
-        dictionary::{Layered, TrieBuf},
+        dictionary::{Layered, LookupStrategy, TrieBuf},
         editor::{EditorKeyBehavior, SymbolSelector, abbrev::AbbrevTable},
         input::{
             KeyboardEvent, keycode,
@@ -2181,5 +2182,174 @@ mod tests {
             ],
             phrases
         );
+    }
+
+    /// U+E0100 is the first variation selector of an ideographic variation
+    /// sequence, so 冊\u{E0100} is one character made of two codepoints.
+    const IVS_CE: &str = "\u{518A}\u{E0100}";
+    /// A family emoji, three emoji joined by zero width joiners.
+    const ZWJ_FAMILY: &str = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
+
+    #[test]
+    fn editing_mode_convert_multi_codepoint_character() {
+        let dict = TrieBuf::from([(
+            vec![crate::syl![bpmf::C, bpmf::E, bpmf::TONE4]],
+            vec![(IVS_CE, 100)],
+        )]);
+        let dict = Layered::new(vec![Box::new(dict), Box::new(TrieBuf::new_in_memory())]);
+        let conversion_engine = Box::new(ChewingEngine::new());
+        let estimate = LaxUserFreqEstimate::new(0);
+        let abbrev = AbbrevTable::new();
+        let sym_sel = SymbolSelector::default();
+        let mut editor = Editor::new(conversion_engine, dict, estimate, abbrev, sym_sel);
+
+        for key in [b'h', b'k', b'4'] {
+            editor.process_keyevent(map_ascii(&QWERTY_MAP, key));
+        }
+
+        assert_eq!(IVS_CE, editor.display());
+        assert_eq!(1, editor.len(), "the sequence occupies one buffer position");
+    }
+
+    #[test]
+    fn editing_mode_input_multi_codepoint_symbol() {
+        let dict = Layered::new(vec![Box::new(TrieBuf::new_in_memory())]);
+        let conversion_engine = Box::new(ChewingEngine::new());
+        let estimate = LaxUserFreqEstimate::new(0);
+        let abbrev = AbbrevTable::new();
+        let table = format!("{ZWJ_FAMILY}\n\u{1F1F9}\u{1F1FC}\n");
+        let sym_sel = SymbolSelector::new(table.as_bytes()).expect("should parse");
+        let mut editor = Editor::new(conversion_engine, dict, estimate, abbrev, sym_sel);
+
+        for key in [b'`', b'1'] {
+            editor.process_keyevent(map_ascii(&QWERTY_MAP, key));
+        }
+
+        assert_eq!(ZWJ_FAMILY, editor.display());
+        assert_eq!(1, editor.len(), "the sequence occupies one buffer position");
+
+        editor.process_keyevent(
+            KeyboardEvent::builder()
+                .code(keycode::KEY_BACKSPACE)
+                .ksym(keysym::SYM_BACKSPACE)
+                .build(),
+        );
+
+        assert_eq!("", editor.display(), "backspace removes the whole sequence");
+    }
+
+    #[test]
+    fn cursor_treats_multi_codepoint_symbol_as_one_position() {
+        let dict = TrieBuf::from([(
+            vec![crate::syl![bpmf::C, bpmf::E, bpmf::TONE4]],
+            vec![("冊", 100)],
+        )]);
+        let dict = Layered::new(vec![Box::new(dict), Box::new(TrieBuf::new_in_memory())]);
+        let conversion_engine = Box::new(ChewingEngine::new());
+        let estimate = LaxUserFreqEstimate::new(0);
+        let abbrev = AbbrevTable::new();
+        let table = format!("{ZWJ_FAMILY}\n");
+        let sym_sel = SymbolSelector::new(table.as_bytes()).expect("should parse");
+        let mut editor = Editor::new(conversion_engine, dict, estimate, abbrev, sym_sel);
+
+        let arrow = |code, ksym| KeyboardEvent::builder().code(code).ksym(ksym).build();
+
+        // The emoji from the symbol table, then a Chinese character
+        for key in [b'`', b'1', b'h', b'k', b'4'] {
+            editor.process_keyevent(map_ascii(&QWERTY_MAP, key));
+        }
+        assert_eq!(format!("{ZWJ_FAMILY}冊"), editor.display());
+        assert_eq!(2, editor.len());
+        assert_eq!(2, editor.cursor());
+
+        // One press of Left steps over the whole emoji, not one codepoint
+        editor.process_keyevent(arrow(keycode::KEY_LEFT, keysym::SYM_LEFT));
+        assert_eq!(1, editor.cursor());
+        editor.process_keyevent(arrow(keycode::KEY_LEFT, keysym::SYM_LEFT));
+        assert_eq!(0, editor.cursor());
+
+        editor.process_keyevent(arrow(keycode::KEY_RIGHT, keysym::SYM_RIGHT));
+        assert_eq!(1, editor.cursor());
+
+        // Delete at the start removes every codepoint of the emoji at once
+        editor.process_keyevent(arrow(keycode::KEY_LEFT, keysym::SYM_LEFT));
+        editor.process_keyevent(arrow(keycode::KEY_DELETE, keysym::SYM_DELETE));
+        assert_eq!("冊", editor.display());
+        assert_eq!(1, editor.len());
+    }
+
+    #[test]
+    fn selecting_candidate_on_multi_codepoint_symbol_does_not_panic() {
+        let dict = Layered::new(vec![Box::new(TrieBuf::new_in_memory())]);
+        let conversion_engine = Box::new(ChewingEngine::new());
+        let estimate = LaxUserFreqEstimate::new(0);
+        let abbrev = AbbrevTable::new();
+        let table = format!("{ZWJ_FAMILY}\n");
+        let sym_sel = SymbolSelector::new(table.as_bytes()).expect("should parse");
+        let mut editor = Editor::new(conversion_engine, dict, estimate, abbrev, sym_sel);
+
+        // Insert the emoji from the symbol table, then ask for candidates on it
+        for key in [b'`', b'1'] {
+            editor.process_keyevent(map_ascii(&QWERTY_MAP, key));
+        }
+        assert_eq!(ZWJ_FAMILY, editor.display());
+
+        editor.process_keyevent(
+            KeyboardEvent::builder()
+                .code(keycode::KEY_DOWN)
+                .ksym(keysym::SYM_DOWN)
+                .build(),
+        );
+
+        // No category holds an emoji sequence, so there are no candidates and
+        // the buffer is left alone
+        assert_eq!(ZWJ_FAMILY, editor.display());
+    }
+
+    #[test]
+    fn learn_phrase_of_multi_codepoint_characters() {
+        let dict = Layered::new(vec![Box::new(TrieBuf::new_in_memory())]);
+        let conversion_engine = Box::new(ChewingEngine::new());
+        let estimate = LaxUserFreqEstimate::new(0);
+        let abbrev = AbbrevTable::new();
+        let sym_sel = SymbolSelector::default();
+        let mut editor = Editor::new(conversion_engine, dict, estimate, abbrev, sym_sel);
+
+        let syllables = [
+            syl![bpmf::C, bpmf::E, bpmf::TONE4],
+            syl![bpmf::SH, bpmf::TONE4],
+        ];
+        let phrase = format!("{IVS_CE}\u{8A66}");
+
+        editor
+            .learn_phrase(&syllables, &phrase)
+            .expect("two characters should match two syllables");
+
+        let learned = editor
+            .user_dict()
+            .lookup(&syllables, LookupStrategy::Standard);
+        assert_eq!(
+            vec![phrase.as_str()],
+            learned.iter().map(|it| it.as_str()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn learn_phrase_rejects_wrong_character_count() {
+        let dict = Layered::new(vec![Box::new(TrieBuf::new_in_memory())]);
+        let conversion_engine = Box::new(ChewingEngine::new());
+        let estimate = LaxUserFreqEstimate::new(0);
+        let abbrev = AbbrevTable::new();
+        let sym_sel = SymbolSelector::default();
+        let mut editor = Editor::new(conversion_engine, dict, estimate, abbrev, sym_sel);
+
+        let syllables = [
+            syl![bpmf::C, bpmf::E, bpmf::TONE4],
+            syl![bpmf::SH, bpmf::TONE4],
+        ];
+
+        // Two codepoints but only one character, so it cannot match two
+        // syllables
+        assert!(editor.learn_phrase(&syllables, IVS_CE).is_err());
     }
 }
